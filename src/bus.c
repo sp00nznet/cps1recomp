@@ -160,6 +160,47 @@ uint32_t bus_read32(uint32_t addr) {
 void bus_write8(uint32_t addr, uint8_t val) {
     addr &= 0xFFFFFF;
 
+    /* CPS register space — byte writes to $800000-$8001FF */
+    if (addr >= 0x800000 && addr < 0x800200) {
+        /* Byte writes to word registers: write to appropriate byte of the word.
+         * CPS1 hardware treats odd-address writes as the low byte. */
+        uint32_t offset = addr - 0x800000;
+
+        /* Sound latch */
+        if (offset >= 0x180 && offset < 0x188) {
+            z80_send_command(val);
+            return;
+        }
+
+        /* CPS-A byte write: route through the 16-bit write interface */
+        if (offset < 0x140) {
+            uint16_t cur = video_read_cps_a(offset & ~1u);
+            if (offset & 1) {
+                cur = (cur & 0xFF00) | val;
+            } else {
+                cur = ((uint16_t)val << 8) | (cur & 0x00FF);
+            }
+            video_write_cps_a(offset & ~1u, cur);
+            return;
+        }
+        return;
+    }
+
+    /* GFX RAM byte write */
+    if (addr >= 0x900000 && addr < 0x930000) {
+        uint32_t offset = addr - 0x900000;
+        /* Construct a 16-bit write from the byte */
+        uint16_t cur = video_gfxram_read(offset & ~1u);
+        if (addr & 1) {
+            cur = (cur & 0xFF00) | val;        /* Low byte */
+        } else {
+            cur = ((uint16_t)val << 8) | (cur & 0x00FF);  /* High byte */
+        }
+        video_gfxram_write(offset & ~1u, cur);
+        return;
+    }
+
+    /* Work RAM */
     if (addr >= 0xFF0000) {
         s_wram[addr & 0xFFFF] = val;
         return;
