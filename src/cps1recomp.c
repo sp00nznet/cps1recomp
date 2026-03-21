@@ -21,7 +21,7 @@ int cps1_init(const cps1_config_t *config) {
     if (palette_init() != 0) return -1;
     if (io_init() != 0) return -1;
     if (timer_init() != 0) return -1;
-    if (z80_init() != 0) return -1;
+    if (z80_cpu_init() != 0) return -1;
     if (ym2151_init(44100) != 0) return -1;
     if (oki6295_init(44100) != 0) return -1;
     debug_init();
@@ -73,7 +73,7 @@ void cps1_shutdown(void) {
     platform_shutdown();
     oki6295_shutdown();
     ym2151_shutdown();
-    z80_shutdown();
+    z80_cpu_shutdown();
     timer_shutdown();
     io_shutdown();
     palette_shutdown();
@@ -95,14 +95,25 @@ void cps1_trigger_vblank(void) {
     /* Render the current frame */
     video_render_frame(s_framebuffer);
 
-    /* Generate audio */
-    int16_t ym_buf[2048];
-    int16_t oki_buf[1024];
-    ym2151_generate(ym_buf, 735);   /* ~44100/60 samples per frame */
-    oki6295_generate(oki_buf, 735);
+    /* Generate audio: ~735 samples per frame at 44100 Hz / 59.63 Hz */
+    #define SAMPLES_PER_FRAME 735
+    int16_t ym_buf[SAMPLES_PER_FRAME * 2];    /* Stereo */
+    int16_t oki_buf[SAMPLES_PER_FRAME];        /* Mono */
+    int16_t mix_buf[SAMPLES_PER_FRAME * 2];    /* Mixed stereo output */
 
-    /* TODO: Mix YM2151 stereo + OKI mono -> output */
-    platform_audio_queue(ym_buf, 735 * 2);
+    ym2151_generate(ym_buf, SAMPLES_PER_FRAME);
+    oki6295_generate(oki_buf, SAMPLES_PER_FRAME);
+
+    /* Mix: YM2151 stereo + OKI mono (center-panned) */
+    for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
+        int32_t l = (int32_t)ym_buf[i * 2 + 0] + (int32_t)oki_buf[i];
+        int32_t r = (int32_t)ym_buf[i * 2 + 1] + (int32_t)oki_buf[i];
+        if (l > 32767) l = 32767; if (l < -32768) l = -32768;
+        if (r > 32767) r = 32767; if (r < -32768) r = -32768;
+        mix_buf[i * 2 + 0] = (int16_t)l;
+        mix_buf[i * 2 + 1] = (int16_t)r;
+    }
+    platform_audio_queue(mix_buf, SAMPLES_PER_FRAME * 2);
 
     /* Run Z80 for one frame */
     z80_execute(60192);  /* 3.579545 MHz / 59.63 Hz */

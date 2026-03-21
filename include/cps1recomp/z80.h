@@ -15,6 +15,9 @@
  *   $E000-$E001  OKI MSM6295
  *   $F000        Sound latch (command from 68k)
  *   $F002        Sound latch clear / bank switch
+ *
+ * Note: Functions are prefixed with z80_cpu_ to avoid symbol collision
+ * with the underlying Genesis-Plus-GX Z80 interpreter core.
  */
 
 #ifndef CPS1RECOMP_Z80_H
@@ -27,8 +30,8 @@
 extern "C" {
 #endif
 
-int z80_init(void);
-void z80_shutdown(void);
+int z80_cpu_init(void);
+void z80_cpu_shutdown(void);
 
 /* Load Z80 sound program ROM. */
 int z80_load_rom(const uint8_t *data, uint32_t size);
@@ -43,7 +46,7 @@ void z80_send_command(uint8_t cmd);
 uint8_t z80_read_reply(void);
 
 /* Reset the Z80. */
-void z80_reset(void);
+void z80_cpu_reset(void);
 
 #ifdef __cplusplus
 }
