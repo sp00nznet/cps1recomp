@@ -23,14 +23,16 @@ extern void bus_set_rom(uint8_t *rom_data, uint32_t size);
 /* SF2 USA Rev A ROM set definition */
 const cps1_romset_t SF2_ROMSET = {
     .name = "sf2",
+    /* 68K program: byte-interleaved pairs (even+odd ROM at each region) */
     .prog_roms = {
-        { "sf2u.30a", 0x00000, 0x20000 },
-        { "sf2u.37a", 0x20000, 0x20000 },
-        { "sf2u.31a", 0x40000, 0x20000 },
-        { "sf2u.35a", 0x60000, 0x20000 },
-        { "sf2u.38a", 0x80000, 0x20000 },
+        { "sf2u.30a",    0x00000, 0x20000 },  /* Even bytes $00000-$3FFFF */
+        { "sf2u.37a",    0x00001, 0x20000 },  /* Odd bytes  $00000-$3FFFF */
+        { "sf2u.31a",    0x40000, 0x20000 },  /* Even bytes $40000-$7FFFF */
+        { "sf2u.35a",    0x40001, 0x20000 },  /* Odd bytes  $40000-$7FFFF */
+        { "sf2_36a.bin", 0x80000, 0x20000 },  /* Even bytes $80000-$BFFFF */
+        { "sf2u.38a",    0x80001, 0x20000 },  /* Odd bytes  $80000-$BFFFF */
     },
-    .num_prog_roms = 5,
+    .num_prog_roms = 6,
     .gfx_roms = {
         { "sf2_06.bin", 0x80000 }, { "sf2_08.bin", 0x80000 },
         { "sf2_05.bin", 0x80000 }, { "sf2_07.bin", 0x80000 },
