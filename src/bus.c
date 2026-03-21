@@ -173,21 +173,24 @@ void bus_write16(uint32_t addr, uint16_t val) {
 
     debug_trace_mem_write(addr, val, 2);
 
-    /* CPS-A registers */
-    if (addr >= 0x800000 && addr < 0x800140) {
-        video_write_cps_a(addr - 0x800000, val);
-        return;
-    }
+    /* CPS1 register space ($800000-$8001FF) */
+    if (addr >= 0x800000 && addr < 0x800200) {
+        uint32_t offset = addr - 0x800000;
 
-    /* CPS-B registers */
-    if (addr >= 0x800140 && addr < 0x800200) {
-        video_write_cps_b(addr - 0x800140, val);
-        return;
-    }
+        /* Sound latch write ($800180-$800187) — check before CPS-B */
+        if (offset >= 0x180 && offset < 0x188) {
+            z80_send_command((uint8_t)val);
+            return;
+        }
 
-    /* Sound latch write (68K -> Z80) */
-    if (addr >= 0x800180 && addr < 0x800188) {
-        z80_send_command((uint8_t)val);
+        /* CPS-B registers ($800140-$8001FF) */
+        if (offset >= 0x140) {
+            video_write_cps_b(offset - 0x140, val);
+            return;
+        }
+
+        /* CPS-A registers ($800000-$80013F) — includes $800100+ layout regs */
+        video_write_cps_a(offset, val);
         return;
     }
 

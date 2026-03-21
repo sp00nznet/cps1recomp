@@ -39,7 +39,7 @@ static uint8_t s_gfxram[CPS1_GFXRAM_SIZE];
 static const uint8_t *s_gfx_data = NULL;
 static uint32_t s_gfx_size = 0;
 
-/* CPS-A registers (up to $140 bytes, word-indexed) */
+/* CPS-A registers: full range $000-$13F = 160 words */
 #define CPS_A_REG_COUNT 0xA0
 static uint16_t s_cps_a[CPS_A_REG_COUNT];
 
@@ -47,17 +47,37 @@ static uint16_t s_cps_a[CPS_A_REG_COUNT];
 #define CPS_B_REG_COUNT 0x60
 static uint16_t s_cps_b[CPS_B_REG_COUNT];
 
-/* ----- CPS-A Register Offsets (byte offsets from $800000) ----- */
-/* These are the standard SF2 CPS-A register assignments */
-#define CPS_A_OBJ_BASE     0x00   /* Object (sprite) base in GFX RAM */
-#define CPS_A_SCROLL1_BASE 0x02   /* Scroll 1 tilemap base */
-#define CPS_A_SCROLL2_BASE 0x04   /* Scroll 2 tilemap base */
-#define CPS_A_SCROLL3_BASE 0x06   /* Scroll 3 tilemap base */
-#define CPS_A_OTHER_BASE   0x08   /* Other (row scroll, etc.) */
-#define CPS_A_PALETTE_BASE 0x0A   /* Palette base in GFX RAM */
-#define CPS_A_SCROLL1_XY   0x0C   /* Scroll 1 X (0C) and Y (0E) offsets */
-#define CPS_A_SCROLL2_XY   0x10   /* Scroll 2 X (10) and Y (12) offsets */
-#define CPS_A_SCROLL3_XY   0x14   /* Scroll 3 X (14) and Y (16) offsets */
+/*
+ * CPS-A Register Map (byte offsets from $800000).
+ *
+ * SF2 init code writes to $800100-$80010E for GFX RAM layout:
+ *   $800100 = $9100 -> scroll1 base = $900000 + ($100 << 8) = $910000
+ *   $800102 = $90C0 -> scroll2 base = $900000 + ($0C0 << 8) = $90C000
+ *   $800104 = $9040 -> scroll3 base = $900000 + ($040 << 8) = $904000
+ *   $800106 = $9080 -> sprite base  = $900000 + ($080 << 8) = $908000
+ *   $800108 = $9200 -> other base   = $900000 + ($200 << 8) = $920000
+ *   $80010A = ?     -> palette ctrl
+ *   $80010C = $FFC0 -> scroll1 X offset
+ *   $80010E = $0000 -> scroll1 Y offset
+ *
+ * And scroll X/Y for layers 2/3 at $800110-$800118.
+ *
+ * Lower CPS-A regs ($800000-$80003F) handle input, sound latch, etc.
+ */
+
+/* GFX RAM layout registers (at $800100+) */
+#define CPS_A_SCROLL1_BASE 0x100  /* Scroll 1 tilemap base in GFX RAM */
+#define CPS_A_SCROLL2_BASE 0x102  /* Scroll 2 tilemap base */
+#define CPS_A_SCROLL3_BASE 0x104  /* Scroll 3 tilemap base */
+#define CPS_A_OBJ_BASE     0x106  /* Object (sprite) base */
+#define CPS_A_OTHER_BASE   0x108  /* Other (palette, row scroll) */
+#define CPS_A_PALETTE_CTRL 0x10A  /* Palette control */
+#define CPS_A_SCROLL1_X    0x10C  /* Scroll 1 X offset */
+#define CPS_A_SCROLL1_Y    0x10E  /* Scroll 1 Y offset */
+#define CPS_A_SCROLL2_X    0x110  /* Scroll 2 X offset */
+#define CPS_A_SCROLL2_Y    0x112  /* Scroll 2 Y offset */
+#define CPS_A_SCROLL3_X    0x114  /* Scroll 3 X offset */
+#define CPS_A_SCROLL3_Y    0x116  /* Scroll 3 Y offset */
 
 /* ----- Initialization ----- */
 
@@ -290,12 +310,21 @@ static void draw_16x16_tile(
  *   The layout is 64x64 tiles wrapping.
  *   Scroll offsets from CPS-A registers control the viewport.
  */
+/*
+ * Helper: extract GFX RAM base address from a CPS-A base register value.
+ * The register value encodes the offset within GFX RAM as: (value & 0x3FFF) << 8
+ * This gives a byte offset within the 192KB GFX RAM space.
+ */
+static inline uint32_t gfxram_base_from_reg(uint16_t reg_val) {
+    return ((uint32_t)(reg_val & 0x3FFF)) << 8;
+}
+
 static void render_scroll1(uint32_t *fb, const uint32_t *argb) {
     uint16_t base_reg = s_cps_a[CPS_A_SCROLL1_BASE / 2];
-    uint32_t tilemap_base = ((uint32_t)base_reg & 0x3FFF) << 4;
+    uint32_t tilemap_base = gfxram_base_from_reg(base_reg);
 
-    int scroll_x = (int16_t)s_cps_a[CPS_A_SCROLL1_XY / 2];
-    int scroll_y = (int16_t)s_cps_a[(CPS_A_SCROLL1_XY + 2) / 2];
+    int scroll_x = (int16_t)s_cps_a[CPS_A_SCROLL1_X / 2];
+    int scroll_y = (int16_t)s_cps_a[CPS_A_SCROLL1_Y / 2];
 
     /* Scroll 1 is 64x64 tiles of 8x8 pixels = 512x512 pixel virtual area */
     int start_col = scroll_x / 8;
@@ -334,10 +363,10 @@ static void render_scroll1(uint32_t *fb, const uint32_t *argb) {
  */
 static void render_scroll2(uint32_t *fb, const uint32_t *argb) {
     uint16_t base_reg = s_cps_a[CPS_A_SCROLL2_BASE / 2];
-    uint32_t tilemap_base = ((uint32_t)base_reg & 0x3FFF) << 4;
+    uint32_t tilemap_base = gfxram_base_from_reg(base_reg);
 
-    int scroll_x = (int16_t)s_cps_a[CPS_A_SCROLL2_XY / 2];
-    int scroll_y = (int16_t)s_cps_a[(CPS_A_SCROLL2_XY + 2) / 2];
+    int scroll_x = (int16_t)s_cps_a[CPS_A_SCROLL2_X / 2];
+    int scroll_y = (int16_t)s_cps_a[CPS_A_SCROLL2_Y / 2];
 
     /* Scroll 2: 64x64 tiles of 16x16 pixels = 1024x1024 virtual area */
     int start_col = scroll_x / 16;
@@ -378,10 +407,10 @@ static void render_scroll2(uint32_t *fb, const uint32_t *argb) {
  */
 static void render_scroll3(uint32_t *fb, const uint32_t *argb) {
     uint16_t base_reg = s_cps_a[CPS_A_SCROLL3_BASE / 2];
-    uint32_t tilemap_base = ((uint32_t)base_reg & 0x3FFF) << 4;
+    uint32_t tilemap_base = gfxram_base_from_reg(base_reg);
 
-    int scroll_x = (int16_t)s_cps_a[CPS_A_SCROLL3_XY / 2];
-    int scroll_y = (int16_t)s_cps_a[(CPS_A_SCROLL3_XY + 2) / 2];
+    int scroll_x = (int16_t)s_cps_a[CPS_A_SCROLL3_X / 2];
+    int scroll_y = (int16_t)s_cps_a[CPS_A_SCROLL3_Y / 2];
 
     int start_col = scroll_x / 16;
     int start_row = scroll_y / 16;
@@ -428,7 +457,7 @@ static void render_scroll3(uint32_t *fb, const uint32_t *argb) {
  */
 static void render_sprites(uint32_t *fb, const uint32_t *argb) {
     uint16_t base_reg = s_cps_a[CPS_A_OBJ_BASE / 2];
-    uint32_t obj_base = ((uint32_t)base_reg & 0x3FFF) << 4;
+    uint32_t obj_base = gfxram_base_from_reg(base_reg);
 
     /* Render sprites back-to-front (sprite 255 first, 0 on top) */
     for (int spr = CPS1_MAX_SPRITES - 1; spr >= 0; spr--) {
