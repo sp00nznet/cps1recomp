@@ -12,33 +12,68 @@ static bool s_initialized = false;
 int cps1_init(const cps1_config_t *config) {
     printf("cps1recomp v%d.%d.%d\n",
            CPS1RECOMP_VERSION_MAJOR, CPS1RECOMP_VERSION_MINOR, CPS1RECOMP_VERSION_PATCH);
+    fflush(stdout);
 
     /* Initialize subsystems in order */
+    printf("[init] bus..."); fflush(stdout);
     if (bus_init() != 0) return -1;
+    printf("ok\n"); fflush(stdout);
+    printf("[init] func_table..."); fflush(stdout);
     if (func_table_init() != 0) return -1;
+    printf("ok\n"); fflush(stdout);
+
+    printf("[init] m68k..."); fflush(stdout);
     m68k_init();
+    printf("ok\n"); fflush(stdout);
+
+    printf("[init] video..."); fflush(stdout);
     if (video_init() != 0) return -1;
+    printf("ok\n"); fflush(stdout);
+
+    printf("[init] palette..."); fflush(stdout);
     if (palette_init() != 0) return -1;
+    printf("ok\n"); fflush(stdout);
+
+    printf("[init] io..."); fflush(stdout);
     if (io_init() != 0) return -1;
+    printf("ok\n"); fflush(stdout);
+
+    printf("[init] timer..."); fflush(stdout);
     if (timer_init() != 0) return -1;
+    printf("ok\n"); fflush(stdout);
+
+    printf("[init] z80..."); fflush(stdout);
     if (z80_cpu_init() != 0) return -1;
+    printf("ok\n"); fflush(stdout);
+
+    printf("[init] ym2151..."); fflush(stdout);
     if (ym2151_init(44100) != 0) return -1;
+    printf("ok\n"); fflush(stdout);
+
+    printf("[init] oki6295..."); fflush(stdout);
     if (oki6295_init(44100) != 0) return -1;
+    printf("ok\n"); fflush(stdout);
+
     debug_init();
 
     /* Load ROMs */
+    printf("[init] loading ROMs..."); fflush(stdout);
     if (config->rom_path) {
         if (rom_load(config->rom_path, &SF2_ROMSET) != 0) {
-            fprintf(stderr, "[cps1] ROM loading not yet implemented (Phase 1)\n");
-            /* Don't fail — allow skeleton to run */
+            printf("WARNING: ROM loading failed\n"); fflush(stdout);
+        } else {
+            printf("ok\n"); fflush(stdout);
         }
     }
 
     /* Initialize platform (SDL2 window, audio, input) */
     int scale = config->window_scale > 0 ? config->window_scale : 3;
+    printf("[init] platform (scale=%d)...", scale); fflush(stdout);
     if (platform_init(scale, config->fullscreen, config->vsync) != 0) {
         return -1;
     }
+    printf("ok\n"); fflush(stdout);
+
     platform_audio_init(44100);
     platform_set_title("Street Fighter II Recompiled");
 
@@ -47,25 +82,71 @@ int cps1_init(const cps1_config_t *config) {
     if (rom) {
         m68k_load_vectors(rom);
         printf("[cps1] Entry point: $%06X, SSP: $%08X\n", g_m68k.pc, g_m68k.ssp);
+        fflush(stdout);
+    } else {
+        printf("[cps1] WARNING: No ROM loaded\n");
+        fflush(stdout);
     }
 
     s_initialized = true;
+    printf("[init] complete\n"); fflush(stdout);
     return 0;
 }
 
 void cps1_run(void) {
     printf("[cps1] Entering main loop (%u functions registered)\n", func_table_count());
+    fflush(stdout);
 
+    /*
+     * CPS1 game execution model:
+     *
+     * 1. Run the entry point (hardware init, one-time setup)
+     * 2. The game installs a VBlank handler that runs every frame
+     * 3. Main loop: render frame, run VBlank handler, present
+     *
+     * The entry point at $00040E initializes hardware and sets up
+     * the game state machine. After init, the game runs from the
+     * VBlank IRQ handler at $000A94 each frame.
+     */
+
+    /* Run one-time initialization from entry point */
+    printf("[cps1] Running entry point at $%06X...\n", g_m68k.pc);
+    fflush(stdout);
+    if (func_table_lookup(g_m68k.pc)) {
+        func_table_call(g_m68k.pc);
+    }
+    printf("[cps1] Entry point returned\n");
+    fflush(stdout);
+
+    /* Find VBlank handler from the vector table */
+    const uint8_t *rom = bus_get_rom_ptr();
+    uint32_t vblank_addr = 0;
+    if (rom) {
+        /* IRQ2 vector is at $68 in the 68K vector table */
+        vblank_addr = ((uint32_t)rom[0x68] << 24) | ((uint32_t)rom[0x69] << 16) |
+                      ((uint32_t)rom[0x6A] << 8)  | rom[0x6B];
+    }
+    printf("[cps1] VBlank handler: $%06X (%s)\n", vblank_addr,
+           func_table_lookup(vblank_addr) ? "registered" : "NOT FOUND");
+    fflush(stdout);
+
+    /* Main frame loop */
+    int frame = 0;
     while (true) {
         cps1_begin_frame();
 
-        /* Execute recompiled 68K code (one frame's worth) */
-        if (func_table_lookup(g_m68k.pc)) {
-            func_table_call(g_m68k.pc);
+        /* Run VBlank handler (the game's per-frame logic) */
+        if (vblank_addr && func_table_lookup(vblank_addr)) {
+            func_table_call(vblank_addr);
         }
 
         cps1_trigger_vblank();
         cps1_end_frame();
+
+        if (frame < 3) {
+            printf("[frame %d] complete\n", frame); fflush(stdout);
+        }
+        frame++;
     }
 }
 

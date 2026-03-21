@@ -26,6 +26,7 @@
  */
 
 #include <cps1recomp/oki6295.h>
+#include <stdbool.h>
 #include <string.h>
 #include <stdio.h>
 

@@ -3,6 +3,7 @@
  */
 
 #include <cps1recomp/timer.h>
+#include <cps1recomp/video.h>
 
 #define CPS1_TOTAL_SCANLINES 262  /* NTSC */
 

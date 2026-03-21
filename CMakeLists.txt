@@ -14,31 +14,44 @@ find_package(SDL2 REQUIRED)
 
 # --- Genesis-Plus-GX Z80 core (from genrecomp submodule) ---
 # Adjust this path to point to your local genrecomp or provide Z80 sources
-set(Z80_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../gen/genrecomp/ext/Genesis-Plus-GX/core/z80)
-
-if(EXISTS ${Z80_DIR}/z80.c)
-    add_library(z80_core STATIC ${Z80_DIR}/z80.c)
-    target_include_directories(z80_core
-        PUBLIC ${Z80_DIR}
-        PUBLIC ${Z80_DIR}/..      # For osd_cpu.h etc.
-    )
-    target_compile_definitions(z80_core PRIVATE
-        LSB_FIRST
-    )
-    if(MSVC)
-        target_compile_options(z80_core PRIVATE /W0)
-    else()
-        target_compile_options(z80_core PRIVATE -w)
+# Try multiple possible locations for external deps
+set(Z80_DIR_CANDIDATES
+    ${CMAKE_CURRENT_SOURCE_DIR}/ext/z80
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../gen/genrecomp/ext/Genesis-Plus-GX/core/z80
+    D:/recomp/gen/genrecomp/ext/Genesis-Plus-GX/core/z80
+)
+set(Z80_DIR "")
+foreach(dir ${Z80_DIR_CANDIDATES})
+    if(EXISTS ${dir}/z80.c)
+        set(Z80_DIR ${dir})
+        break()
     endif()
-    set(HAVE_Z80_CORE TRUE)
-    message(STATUS "Found Z80 core at ${Z80_DIR}")
-else()
-    set(HAVE_Z80_CORE FALSE)
-    message(WARNING "Z80 core not found at ${Z80_DIR} — Z80 sound will be disabled")
+endforeach()
+if(Z80_DIR STREQUAL "")
+    set(Z80_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ext/z80)  # fallback
 endif()
 
+# Z80 core: disabled for now (GenPlusGX Z80 has too many dependencies)
+# TODO: integrate a standalone Z80 interpreter (z80ex, or extract/port the core)
+set(HAVE_Z80_CORE FALSE)
+message(STATUS "Z80 core: using stub (no sound driver execution)")
+
 # --- ymfm library (for YM2151) ---
-set(YMFM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../gen/genrecomp/ext/ymfm/src)
+set(YMFM_DIR_CANDIDATES
+    ${CMAKE_CURRENT_SOURCE_DIR}/ext/ymfm/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../gen/genrecomp/ext/ymfm/src
+    D:/recomp/gen/genrecomp/ext/ymfm/src
+)
+set(YMFM_DIR "")
+foreach(dir ${YMFM_DIR_CANDIDATES})
+    if(EXISTS ${dir}/ymfm_opm.cpp)
+        set(YMFM_DIR ${dir})
+        break()
+    endif()
+endforeach()
+if(YMFM_DIR STREQUAL "")
+    set(YMFM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ext/ymfm/src)
+endif()
 
 if(EXISTS ${YMFM_DIR}/ymfm_opm.cpp)
     add_library(ymfm STATIC
