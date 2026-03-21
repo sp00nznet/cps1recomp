@@ -1,0 +1,250 @@
+/*
+ * bus.c — CPS1 memory bus implementation.
+ *
+ * Routes 68000 memory accesses to the appropriate hardware subsystem.
+ * All values are stored big-endian in RAM arrays and converted on access.
+ */
+
+#include <cps1recomp/bus.h>
+#include <cps1recomp/video.h>
+#include <cps1recomp/palette.h>
+#include <cps1recomp/io.h>
+#include <cps1recomp/z80.h>
+#include <cps1recomp/timer.h>
+#include <cps1recomp/debug.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+/* Memory regions */
+static uint8_t *s_rom = NULL;       /* Program ROM (up to 4 MB) */
+static uint32_t s_rom_size = 0;
+static uint8_t s_wram[0x10000];     /* 64 KB work RAM ($FF0000-$FFFFFF) */
+
+int bus_init(void) {
+    memset(s_wram, 0, sizeof(s_wram));
+    return 0;
+}
+
+void bus_shutdown(void) {
+    free(s_rom);
+    s_rom = NULL;
+    s_rom_size = 0;
+}
+
+/* Called by ROM loader to install the program ROM. */
+void bus_set_rom(uint8_t *rom_data, uint32_t size) {
+    s_rom = rom_data;
+    s_rom_size = size;
+}
+
+/* --- Big-endian helpers --- */
+
+static inline uint16_t be_read16(const uint8_t *p) {
+    return ((uint16_t)p[0] << 8) | p[1];
+}
+
+static inline void be_write16(uint8_t *p, uint16_t val) {
+    p[0] = (uint8_t)(val >> 8);
+    p[1] = (uint8_t)val;
+}
+
+static inline uint32_t be_read32(const uint8_t *p) {
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8)  | p[3];
+}
+
+static inline void be_write32(uint8_t *p, uint32_t val) {
+    p[0] = (uint8_t)(val >> 24);
+    p[1] = (uint8_t)(val >> 16);
+    p[2] = (uint8_t)(val >> 8);
+    p[3] = (uint8_t)val;
+}
+
+/* --- Address-decoded bus access --- */
+
+uint8_t bus_read8(uint32_t addr) {
+    addr &= 0xFFFFFF;  /* 24-bit address bus */
+
+    /* Program ROM */
+    if (addr < s_rom_size) {
+        return s_rom[addr];
+    }
+
+    /* CPS-A registers */
+    if (addr >= 0x800000 && addr < 0x800140) {
+        uint32_t offset = addr - 0x800000;
+        /* Byte access to word registers */
+        uint16_t val = video_read_cps_a(offset & ~1);
+        return (addr & 1) ? (uint8_t)val : (uint8_t)(val >> 8);
+    }
+
+    /* CPS-B registers */
+    if (addr >= 0x800140 && addr < 0x800200) {
+        uint32_t offset = addr - 0x800140;
+        uint16_t val = video_read_cps_b(offset & ~1);
+        return (addr & 1) ? (uint8_t)val : (uint8_t)(val >> 8);
+    }
+
+    /* GFX RAM */
+    if (addr >= 0x900000 && addr < 0x930000) {
+        uint32_t offset = addr - 0x900000;
+        uint16_t val = video_gfxram_read(offset & ~1);
+        return (addr & 1) ? (uint8_t)val : (uint8_t)(val >> 8);
+    }
+
+    /* Work RAM */
+    if (addr >= 0xFF0000) {
+        return s_wram[addr & 0xFFFF];
+    }
+
+    debug_log("[bus] Unmapped read8: $%06X\n", addr);
+    return 0xFF;
+}
+
+uint16_t bus_read16(uint32_t addr) {
+    addr &= 0xFFFFFF;
+
+    if (addr < s_rom_size) {
+        return be_read16(s_rom + addr);
+    }
+
+    /* Input ports */
+    if (addr >= 0x800000 && addr < 0x800020) {
+        /* CPS1 input reads are mapped into the CPS-A register space */
+        switch (addr) {
+            case 0x800000: return io_read_player1();
+            case 0x800018: return io_read_player2();
+            case 0x800020: return io_read_extra();    /* SF2 kick buttons */
+            case 0x80001A: return io_read_dsw();
+            case 0x80001C: return io_read_system();
+        }
+    }
+
+    /* CPS-A registers */
+    if (addr >= 0x800000 && addr < 0x800140) {
+        return video_read_cps_a(addr - 0x800000);
+    }
+
+    /* CPS-B registers */
+    if (addr >= 0x800140 && addr < 0x800200) {
+        return video_read_cps_b(addr - 0x800140);
+    }
+
+    /* Sound latch read */
+    if (addr >= 0x800180 && addr < 0x800188) {
+        return z80_read_reply();
+    }
+
+    /* GFX RAM (includes palette area) */
+    if (addr >= 0x900000 && addr < 0x930000) {
+        return video_gfxram_read(addr - 0x900000);
+    }
+
+    /* Work RAM */
+    if (addr >= 0xFF0000) {
+        return be_read16(s_wram + (addr & 0xFFFF));
+    }
+
+    debug_log("[bus] Unmapped read16: $%06X\n", addr);
+    return 0xFFFF;
+}
+
+uint32_t bus_read32(uint32_t addr) {
+    return ((uint32_t)bus_read16(addr) << 16) | bus_read16(addr + 2);
+}
+
+void bus_write8(uint32_t addr, uint8_t val) {
+    addr &= 0xFFFFFF;
+
+    if (addr >= 0xFF0000) {
+        s_wram[addr & 0xFFFF] = val;
+        return;
+    }
+
+    debug_log("[bus] Unmapped write8: $%06X = $%02X\n", addr, val);
+}
+
+void bus_write16(uint32_t addr, uint16_t val) {
+    addr &= 0xFFFFFF;
+
+    debug_trace_mem_write(addr, val, 2);
+
+    /* CPS-A registers */
+    if (addr >= 0x800000 && addr < 0x800140) {
+        video_write_cps_a(addr - 0x800000, val);
+        return;
+    }
+
+    /* CPS-B registers */
+    if (addr >= 0x800140 && addr < 0x800200) {
+        video_write_cps_b(addr - 0x800140, val);
+        return;
+    }
+
+    /* Sound latch write (68K -> Z80) */
+    if (addr >= 0x800180 && addr < 0x800188) {
+        z80_send_command((uint8_t)val);
+        return;
+    }
+
+    /* GFX RAM */
+    if (addr >= 0x900000 && addr < 0x930000) {
+        uint32_t offset = addr - 0x900000;
+
+        /* Palette area is typically at a CPS-A configured offset within GFX RAM */
+        video_gfxram_write(offset, val);
+
+        /* Also update palette if in the palette region */
+        /* The palette base is configured via CPS-A registers; for SF2 it's $920000 */
+        if (addr >= 0x920000 && addr < 0x920C00) {
+            palette_write(addr - 0x920000, val);
+        }
+        return;
+    }
+
+    /* Work RAM */
+    if (addr >= 0xFF0000) {
+        be_write16(s_wram + (addr & 0xFFFF), val);
+        return;
+    }
+
+    debug_log("[bus] Unmapped write16: $%06X = $%04X\n", addr, val);
+}
+
+void bus_write32(uint32_t addr, uint32_t val) {
+    bus_write16(addr, (uint16_t)(val >> 16));
+    bus_write16(addr + 2, (uint16_t)val);
+}
+
+/* --- Fast Work RAM accessors --- */
+
+uint8_t bus_wram_read8(uint32_t offset) {
+    return s_wram[offset & 0xFFFF];
+}
+
+uint16_t bus_wram_read16(uint32_t offset) {
+    return be_read16(s_wram + (offset & 0xFFFF));
+}
+
+uint32_t bus_wram_read32(uint32_t offset) {
+    return be_read32(s_wram + (offset & 0xFFFF));
+}
+
+void bus_wram_write8(uint32_t offset, uint8_t val) {
+    s_wram[offset & 0xFFFF] = val;
+}
+
+void bus_wram_write16(uint32_t offset, uint16_t val) {
+    be_write16(s_wram + (offset & 0xFFFF), val);
+}
+
+void bus_wram_write32(uint32_t offset, uint32_t val) {
+    be_write32(s_wram + (offset & 0xFFFF), val);
+}
+
+/* --- Direct pointers --- */
+
+const uint8_t *bus_get_rom_ptr(void) { return s_rom; }
+uint32_t bus_get_rom_size(void) { return s_rom_size; }
+uint8_t *bus_get_wram_ptr(void) { return s_wram; }
