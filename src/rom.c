@@ -47,9 +47,9 @@ const cps1_romset_t SF2_ROMSET = {
         { "sf2_19.bin", 0x20000 },
     },
     .num_oki_roms = 2,
-    .total_prog_size = 0xA0000,
-    .total_gfx_size  = 0x600000,
-    .total_oki_size  = 0x40000,
+    .total_prog_size = 0xC0000,      /* 768 KB (3 byte-interleaved pairs) */
+    .total_gfx_size  = 0x600000,     /* 6 MB */
+    .total_oki_size  = 0x40000,      /* 256 KB */
 };
 
 /* Static data for ROM files */

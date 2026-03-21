@@ -109,31 +109,34 @@ uint16_t bus_read16(uint32_t addr) {
         return be_read16(s_rom + addr);
     }
 
-    /* Input ports */
-    if (addr >= 0x800000 && addr < 0x800020) {
-        /* CPS1 input reads are mapped into the CPS-A register space */
+    /* CPS1 I/O and register space ($800000-$8001FF) */
+    if (addr >= 0x800000 && addr < 0x800200) {
+        uint32_t offset = addr - 0x800000;
+
+        /* Input ports (active during reads) — SF2 layout */
         switch (addr) {
-            case 0x800000: return io_read_player1();
-            case 0x800018: return io_read_player2();
-            case 0x800020: return io_read_extra();    /* SF2 kick buttons */
-            case 0x80001A: return io_read_dsw();
-            case 0x80001C: return io_read_system();
+            case 0x800000: return io_read_player1();     /* P1 direction + punches */
+            case 0x800006: return io_read_player1();     /* P1 alt read */
+            case 0x800008: return io_read_player2();     /* P2 direction + punches */
+            case 0x800018: return io_read_player2();     /* P2 alt */
+            case 0x80001A: return io_read_dsw();         /* DIP switches A */
+            case 0x80001C: return io_read_system();      /* Coins + starts */
+            case 0x80001E: return io_read_dsw();         /* DIP switches B */
+            case 0x800176: return io_read_extra();       /* SF2 kick buttons (CPS-B mapped) */
         }
-    }
 
-    /* CPS-A registers */
-    if (addr >= 0x800000 && addr < 0x800140) {
-        return video_read_cps_a(addr - 0x800000);
-    }
+        /* Sound latch read ($800180-$800187) */
+        if (offset >= 0x180 && offset < 0x188) {
+            return z80_read_reply();
+        }
 
-    /* CPS-B registers */
-    if (addr >= 0x800140 && addr < 0x800200) {
-        return video_read_cps_b(addr - 0x800140);
-    }
+        /* CPS-B registers ($800140-$8001FF) */
+        if (offset >= 0x140) {
+            return video_read_cps_b(offset - 0x140);
+        }
 
-    /* Sound latch read */
-    if (addr >= 0x800180 && addr < 0x800188) {
-        return z80_read_reply();
+        /* CPS-A registers ($800000-$80013F) */
+        return video_read_cps_a(offset);
     }
 
     /* GFX RAM (includes palette area) */
