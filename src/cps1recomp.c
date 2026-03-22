@@ -81,6 +81,15 @@ int cps1_init(const cps1_config_t *config) {
     const uint8_t *rom = bus_get_rom_ptr();
     if (rom) {
         m68k_load_vectors(rom);
+        /* CPS1 SF2: SSP in ROM is 0 — the init code sets it up.
+         * We need a valid stack for recompiled code to work, so
+         * set SSP to top of Work RAM if it's 0. */
+        printf("[cps1] ROM SSP: $%08X, A7: $%08X\n", g_m68k.ssp, g_m68k.a[7]);
+        fflush(stdout);
+        /* CPS1: SSP is 0 in ROM, game init sets it up. Force valid stack. */
+        g_m68k.ssp = 0x00FFFFFC;
+        g_m68k.a[7] = 0x00FFFFFC;
+        m68k_set_sr(0x2700);  /* Supervisor mode, interrupts masked */
         printf("[cps1] Entry point: $%06X, SSP: $%08X\n", g_m68k.pc, g_m68k.ssp);
         fflush(stdout);
     } else {
@@ -137,15 +146,25 @@ void cps1_run(void) {
 
         /* Run VBlank handler (the game's per-frame logic) */
         if (vblank_addr && func_table_lookup(vblank_addr)) {
+            printf("[frame %d] calling VBlank $%06X\n", frame, vblank_addr); fflush(stdout);
             func_table_call(vblank_addr);
+            printf("[frame %d] VBlank returned\n", frame); fflush(stdout);
+        } else {
+            printf("[frame %d] no VBlank handler\n", frame); fflush(stdout);
         }
 
-        cps1_trigger_vblank();
-        cps1_end_frame();
+        printf("[frame %d] rendering...\n", frame); fflush(stdout);
+        video_render_frame(s_framebuffer);
+        printf("[frame %d] render done\n", frame); fflush(stdout);
 
-        if (frame < 3) {
-            printf("[frame %d] complete\n", frame); fflush(stdout);
-        }
+        /* Present and poll input (skip audio for now) */
+        printf("[frame %d] present\n", frame); fflush(stdout);
+        platform_present(s_framebuffer);
+        printf("[frame %d] poll\n", frame); fflush(stdout);
+        if (!platform_poll_input()) { printf("QUIT\n"); fflush(stdout); exit(0); }
+        platform_frame_sync();
+
+        printf("[frame %d] complete\n", frame); fflush(stdout);
         frame++;
     }
 }
