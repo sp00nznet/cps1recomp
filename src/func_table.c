@@ -61,13 +61,14 @@ void func_table_register(uint32_t addr, cps1_func_t func) {
 static int s_miss_count = 0;
 
 void func_table_call(uint32_t addr) {
+    if (addr == 0) return;  /* Skip null calls */
     cps1_func_t func = func_table_lookup(addr);
     if (func) {
         debug_trace_call(addr, NULL);
         func();
     } else {
         s_miss_count++;
-        if (s_miss_count <= 50) {
+        if (s_miss_count <= 100) {
             fprintf(stderr, "[func_table] MISS #%d: no function at $%06X\n", s_miss_count, addr);
             fflush(stderr);
         }

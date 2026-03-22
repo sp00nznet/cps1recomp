@@ -118,14 +118,49 @@ void cps1_run(void) {
      * VBlank IRQ handler at $000A94 each frame.
      */
 
-    /* Run one-time initialization from entry point */
-    printf("[cps1] Running entry point at $%06X...\n", g_m68k.pc);
-    fflush(stdout);
-    if (func_table_lookup(g_m68k.pc)) {
-        func_table_call(g_m68k.pc);
+    /*
+     * Hardware initialization.
+     *
+     * SF2's init code uses a custom calling convention (LEA+BRA with A4
+     * as return register) that the recompiler can't follow. Instead of
+     * running the init chain, we apply the known register values that
+     * SF2's init code would write to the CPS-A registers.
+     *
+     * Values extracted from disassembly of $00040E-$0004A6:
+     */
+    printf("[cps1] Applying SF2 hardware init...\n"); fflush(stdout);
+    {
+        /* CPS-A register writes from the init code */
+        bus_write8(0x800030, 0x80);    /* Reset pulse */
+        bus_write8(0x800030, 0x00);    /* Release reset */
+        bus_write8(0x800181, 0xF0);    /* Sound latch init */
+
+        /* GFX RAM layout */
+        bus_write16(0x80010C, 0xFFC0); /* Scroll 1 X offset */
+        bus_write16(0x80010E, 0x0000); /* Scroll 1 Y offset */
+        bus_write16(0x800100, 0x9100); /* Scroll 1 base */
+        bus_write16(0x800102, 0x90C0); /* Scroll 2 base */
+        bus_write16(0x800104, 0x9040); /* Scroll 3 base */
+        bus_write16(0x800106, 0x9080); /* Sprite base */
+        bus_write16(0x800108, 0x9200); /* Other/palette base */
+        bus_write16(0x80010A, 0x9000); /* Palette control */
+
+        /* CPS-B registers from init */
+        bus_write16(0x800154, 0x12C8); /* CPS-B ID / config */
+        bus_write16(0x800122, 0x003E); /* Layer enable */
+        bus_write16(0x80014A, 0x003F); /* Priority mask */
+
+        /* Set up scroll offsets for layers 2 and 3 */
+        bus_write16(0x800110, 0x0000); /* Scroll 2 X */
+        bus_write16(0x800112, 0x0000); /* Scroll 2 Y */
+        bus_write16(0x800114, 0x0000); /* Scroll 3 X */
+        bus_write16(0x800116, 0x0000); /* Scroll 3 Y */
+
+        /* Initialize Work RAM stack area */
+        g_m68k.a[7] = 0x00FFFFFC;
+
+        printf("[cps1] CPS-A/B registers configured\n"); fflush(stdout);
     }
-    printf("[cps1] Entry point returned\n");
-    fflush(stdout);
 
     /* Find VBlank handler from the vector table */
     const uint8_t *rom = bus_get_rom_ptr();
