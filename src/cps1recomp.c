@@ -195,18 +195,31 @@ void cps1_run(void) {
          * Scroll 2 base = $90C0 -> GFX RAM offset $0C000 (bus $90C000).
          * Each entry is 2 words (4 bytes):
          *   Word 0: tile number (16-bit)
-         *   Word 1: palette[15:11] | flip_y[5] | flip_x[4] | priority[3:0]
+         *   Word 1: [palette:5 bits][flip_y:1][flip_x:1][???:9]
+         *           palette is in bits 6-1 shifted left
          *
-         * Use tile numbers 1-100 which should hit actual GFX ROM data.
-         * Layout: 64 columns * 64 rows, column-major.
+         * Use tile numbers 50-425 which have actual graphic data.
+         * 16x16 tiles cover the 384x224 screen in a 24x14 grid.
          */
-        for (int col = 0; col < 25; col++) {
-            for (int row = 0; row < 15; row++) {
+        for (int col = 0; col < 24; col++) {
+            for (int row = 0; row < 14; row++) {
                 uint32_t entry_addr = 0x90C000 + (uint32_t)(col * 64 + row) * 4;
-                uint16_t tile_num = (uint16_t)((col * 15 + row + 1) & 0xFFFF);
-                /* Palette 0, no flip */
+                uint16_t tile_num = (uint16_t)(50 + col * 14 + row);
+                /* Use palette 0, no flip */
                 bus_write16(entry_addr, tile_num);
                 bus_write16(entry_addr + 2, 0x0000);
+            }
+        }
+
+        /* Also set some palettes with varied colors for different palette indices */
+        for (int pal = 1; pal < 16; pal++) {
+            uint32_t pal_base = 0x920000 + (uint32_t)(pal * 32);
+            for (int c = 0; c < 16; c++) {
+                /* Cycle through hues based on palette index */
+                uint16_t color = (uint16_t)(((pal * 3 + c) & 0xF) << 8 |
+                                            ((pal * 5 + c) & 0xF) << 4 |
+                                            ((pal * 7 + c) & 0xF));
+                bus_write16(pal_base + c * 2, color);
             }
         }
 
