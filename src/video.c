@@ -312,11 +312,11 @@ static void draw_16x16_tile(
  */
 /*
  * Helper: extract GFX RAM base address from a CPS-A base register value.
- * The register value encodes the offset within GFX RAM as: (value & 0x3FFF) << 8
- * This gives a byte offset within the 192KB GFX RAM space.
+ * The register value is shifted left 8 and masked to the GFX RAM size.
+ * Example: $90C0 -> ($90C0 << 8) & $2FFFF = $0C000
  */
 static inline uint32_t gfxram_base_from_reg(uint16_t reg_val) {
-    return ((uint32_t)(reg_val & 0x3FFF)) << 8;
+    return ((uint32_t)reg_val << 8) & (CPS1_GFXRAM_SIZE - 1);
 }
 
 static void render_scroll1(uint32_t *fb, const uint32_t *argb) {

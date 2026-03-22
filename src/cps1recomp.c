@@ -160,6 +160,58 @@ void cps1_run(void) {
         g_m68k.a[7] = 0x00FFFFFC;
 
         printf("[cps1] CPS-A/B registers configured\n"); fflush(stdout);
+
+        /*
+         * Write test pattern to GFX RAM + palette to verify renderer.
+         *
+         * Palette: write some visible colors at palette base ($920000).
+         * Scroll 2 tilemap: write tile entries at scroll2 base ($90C000).
+         * The tiles reference GFX ROM data, so we need tile numbers that
+         * correspond to actual non-empty tiles in the decoded GFX data.
+         */
+        printf("[cps1] Writing test pattern...\n"); fflush(stdout);
+
+        /* Set up palette 0 with visible colors */
+        /* Palette is at GFX RAM offset $20000 (bus addr $920000) */
+        /* Color format: ----RRRR GGGGBBBB (12-bit RGB) */
+        bus_write16(0x920000, 0x0000);  /* Color 0: transparent/black */
+        bus_write16(0x920002, 0x0F00);  /* Color 1: red */
+        bus_write16(0x920004, 0x00F0);  /* Color 2: green */
+        bus_write16(0x920006, 0x000F);  /* Color 3: blue */
+        bus_write16(0x920008, 0x0FF0);  /* Color 4: yellow */
+        bus_write16(0x92000A, 0x0F0F);  /* Color 5: magenta */
+        bus_write16(0x92000C, 0x00FF);  /* Color 6: cyan */
+        bus_write16(0x92000E, 0x0FFF);  /* Color 7: white */
+        bus_write16(0x920010, 0x0888);  /* Color 8: gray */
+        bus_write16(0x920012, 0x0F80);  /* Color 9: orange */
+        /* Set palette 1 as well */
+        for (int i = 0; i < 16; i++) {
+            uint16_t c = bus_read16(0x920000 + i * 2);
+            bus_write16(0x920020 + i * 2, c);
+        }
+
+        /*
+         * Write scroll 2 tilemap entries.
+         * Scroll 2 base = $90C0 -> GFX RAM offset $0C000 (bus $90C000).
+         * Each entry is 2 words (4 bytes):
+         *   Word 0: tile number (16-bit)
+         *   Word 1: palette[15:11] | flip_y[5] | flip_x[4] | priority[3:0]
+         *
+         * Use tile numbers 1-100 which should hit actual GFX ROM data.
+         * Layout: 64 columns * 64 rows, column-major.
+         */
+        for (int col = 0; col < 25; col++) {
+            for (int row = 0; row < 15; row++) {
+                uint32_t entry_addr = 0x90C000 + (uint32_t)(col * 64 + row) * 4;
+                uint16_t tile_num = (uint16_t)((col * 15 + row + 1) & 0xFFFF);
+                /* Palette 0, no flip */
+                bus_write16(entry_addr, tile_num);
+                bus_write16(entry_addr + 2, 0x0000);
+            }
+        }
+
+        printf("[cps1] Test pattern written (scroll2 tiles + palette)\n");
+        fflush(stdout);
     }
 
     /* Find VBlank handler from the vector table */
@@ -179,27 +231,59 @@ void cps1_run(void) {
     while (true) {
         cps1_begin_frame();
 
-        /* Run VBlank handler (the game's per-frame logic) */
+        /* Run VBlank handler */
         if (vblank_addr && func_table_lookup(vblank_addr)) {
-            printf("[frame %d] calling VBlank $%06X\n", frame, vblank_addr); fflush(stdout);
             func_table_call(vblank_addr);
-            printf("[frame %d] VBlank returned\n", frame); fflush(stdout);
-        } else {
-            printf("[frame %d] no VBlank handler\n", frame); fflush(stdout);
         }
 
-        printf("[frame %d] rendering...\n", frame); fflush(stdout);
+        /* Render + present */
         video_render_frame(s_framebuffer);
-        printf("[frame %d] render done\n", frame); fflush(stdout);
-
-        /* Present and poll input (skip audio for now) */
-        printf("[frame %d] present\n", frame); fflush(stdout);
         platform_present(s_framebuffer);
-        printf("[frame %d] poll\n", frame); fflush(stdout);
-        if (!platform_poll_input()) { printf("QUIT\n"); fflush(stdout); exit(0); }
+        if (!platform_poll_input()) exit(0);
         platform_frame_sync();
 
-        printf("[frame %d] complete\n", frame); fflush(stdout);
+        /* Dump framebuffer to BMP on frame 1 for debugging */
+        if (frame == 1) {
+            FILE *bmp = fopen("sf2_frame.bmp", "wb");
+            if (bmp) {
+                /* Write minimal BMP header (384x224, 32bpp) */
+                int w = CPS1_SCREEN_WIDTH, h = CPS1_SCREEN_HEIGHT;
+                int row_bytes = w * 4;
+                int img_size = row_bytes * h;
+                int file_size = 54 + img_size;
+                uint8_t hdr[54] = {0};
+                hdr[0]='B'; hdr[1]='M';
+                hdr[2]=file_size; hdr[3]=file_size>>8; hdr[4]=file_size>>16; hdr[5]=file_size>>24;
+                hdr[10]=54;
+                hdr[14]=40; /* DIB header size */
+                hdr[18]=w; hdr[19]=w>>8;
+                hdr[22]=h; hdr[23]=h>>8; /* positive = bottom-up */
+                hdr[26]=1; /* planes */
+                hdr[28]=32; /* bpp */
+                hdr[34]=img_size; hdr[35]=img_size>>8; hdr[36]=img_size>>16; hdr[37]=img_size>>24;
+                fwrite(hdr, 1, 54, bmp);
+                /* BMP is bottom-up, ARGB -> BGRA */
+                for (int y = h - 1; y >= 0; y--) {
+                    for (int x = 0; x < w; x++) {
+                        uint32_t px = s_framebuffer[y * w + x];
+                        uint8_t bgra[4] = {
+                            (uint8_t)(px),         /* B */
+                            (uint8_t)(px >> 8),    /* G */
+                            (uint8_t)(px >> 16),   /* R */
+                            (uint8_t)(px >> 24)    /* A */
+                        };
+                        fwrite(bgra, 1, 4, bmp);
+                    }
+                }
+                fclose(bmp);
+                printf("[frame %d] Saved framebuffer to sf2_frame.bmp\n", frame);
+                fflush(stdout);
+            }
+        }
+
+        if (frame < 3 || frame % 600 == 0) {
+            printf("[frame %d]\n", frame); fflush(stdout);
+        }
         frame++;
     }
 }
