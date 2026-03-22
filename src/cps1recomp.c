@@ -160,72 +160,16 @@ void cps1_run(void) {
         g_m68k.a[7] = 0x00FFFFFC;
 
         printf("[cps1] CPS-A/B registers configured\n"); fflush(stdout);
-
-        /*
-         * Write test pattern to GFX RAM + palette to verify renderer.
-         *
-         * Palette: write some visible colors at palette base ($920000).
-         * Scroll 2 tilemap: write tile entries at scroll2 base ($90C000).
-         * The tiles reference GFX ROM data, so we need tile numbers that
-         * correspond to actual non-empty tiles in the decoded GFX data.
-         */
-        printf("[cps1] Writing test pattern...\n"); fflush(stdout);
-
-        /* Set up palette 0 with visible colors */
-        /* Palette is at GFX RAM offset $20000 (bus addr $920000) */
-        /* Color format: ----RRRR GGGGBBBB (12-bit RGB) */
-        bus_write16(0x920000, 0x0000);  /* Color 0: transparent/black */
-        bus_write16(0x920002, 0x0F00);  /* Color 1: red */
-        bus_write16(0x920004, 0x00F0);  /* Color 2: green */
-        bus_write16(0x920006, 0x000F);  /* Color 3: blue */
-        bus_write16(0x920008, 0x0FF0);  /* Color 4: yellow */
-        bus_write16(0x92000A, 0x0F0F);  /* Color 5: magenta */
-        bus_write16(0x92000C, 0x00FF);  /* Color 6: cyan */
-        bus_write16(0x92000E, 0x0FFF);  /* Color 7: white */
-        bus_write16(0x920010, 0x0888);  /* Color 8: gray */
-        bus_write16(0x920012, 0x0F80);  /* Color 9: orange */
-        /* Set palette 1 as well */
-        for (int i = 0; i < 16; i++) {
-            uint16_t c = bus_read16(0x920000 + i * 2);
-            bus_write16(0x920020 + i * 2, c);
-        }
-
-        /*
-         * Write scroll 2 tilemap entries.
-         * Scroll 2 base = $90C0 -> GFX RAM offset $0C000 (bus $90C000).
-         * Each entry is 2 words (4 bytes):
-         *   Word 0: tile number (16-bit)
-         *   Word 1: [palette:5 bits][flip_y:1][flip_x:1][???:9]
-         *           palette is in bits 6-1 shifted left
-         *
-         * Use tile numbers 50-425 which have actual graphic data.
-         * 16x16 tiles cover the 384x224 screen in a 24x14 grid.
-         */
-        for (int col = 0; col < 24; col++) {
-            for (int row = 0; row < 14; row++) {
-                uint32_t entry_addr = 0x90C000 + (uint32_t)(col * 64 + row) * 4;
-                uint16_t tile_num = (uint16_t)(50 + col * 14 + row);
-                /* Use palette 0, no flip */
-                bus_write16(entry_addr, tile_num);
-                bus_write16(entry_addr + 2, 0x0000);
-            }
-        }
-
-        /* Also set some palettes with varied colors for different palette indices */
-        for (int pal = 1; pal < 16; pal++) {
-            uint32_t pal_base = 0x920000 + (uint32_t)(pal * 32);
-            for (int c = 0; c < 16; c++) {
-                /* Cycle through hues based on palette index */
-                uint16_t color = (uint16_t)(((pal * 3 + c) & 0xF) << 8 |
-                                            ((pal * 5 + c) & 0xF) << 4 |
-                                            ((pal * 7 + c) & 0xF));
-                bus_write16(pal_base + c * 2, color);
-            }
-        }
-
-        printf("[cps1] Test pattern written (scroll2 tiles + palette)\n");
-        fflush(stdout);
     }
+
+    /* Now run the entry point — with LEA+BRA fix, it should execute
+     * the full init chain including memory clears and GFX setup. */
+    printf("[cps1] Running entry point at $%06X...\n", g_m68k.pc);
+    fflush(stdout);
+    if (func_table_lookup(g_m68k.pc)) {
+        func_table_call(g_m68k.pc);
+    }
+    printf("[cps1] Entry point returned\n"); fflush(stdout);
 
     /* Find VBlank handler from the vector table */
     const uint8_t *rom = bus_get_rom_ptr();
