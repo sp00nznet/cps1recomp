@@ -27,7 +27,10 @@ static uint8_t s_wram[0x10000];     /* 64 KB work RAM ($FF0000-$FFFFFF) */
  * This allows us to yield to the frame loop, render, and present.
  */
 static void (*s_vblank_hook)(void) = NULL;
+static bool s_vblank_hook_armed = true;
 void bus_set_vblank_hook(void (*hook)(void)) { s_vblank_hook = hook; }
+void bus_vblank_hook_arm(void) { s_vblank_hook_armed = true; }
+void bus_vblank_hook_disarm(void) { s_vblank_hook_armed = false; }
 
 #define VBLANK_FLAG_ADDR 0x020E  /* Offset in Work RAM */
 
@@ -113,8 +116,9 @@ uint8_t bus_read8(uint32_t addr) {
     /* Work RAM */
     if (addr >= 0xFF0000) {
         uint32_t offset = addr & 0xFFFF;
-        /* VBlank flag intercept */
-        if (offset == VBLANK_FLAG_ADDR && s_vblank_hook) {
+        /* VBlank flag intercept: only fire when armed (auto-disarms) */
+        if (offset == VBLANK_FLAG_ADDR && s_vblank_hook && s_vblank_hook_armed) {
+            s_vblank_hook_armed = false;
             s_vblank_hook();
         }
         return s_wram[offset];

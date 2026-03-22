@@ -60,6 +60,12 @@ void bus_wram_write32(uint32_t offset, uint32_t val);
  */
 void bus_set_vblank_hook(void (*hook)(void));
 
+/* Arm/disarm the vblank hook.  When armed, the next read of the VBlank
+   flag address fires the hook and auto-disarms.  This prevents multiple
+   hook firings within a single frame (e.g., when task code polls the flag). */
+void bus_vblank_hook_arm(void);
+void bus_vblank_hook_disarm(void);
+
 /* ----- Direct Pointers (for tools/analysis) ----- */
 
 const uint8_t *bus_get_rom_ptr(void);
