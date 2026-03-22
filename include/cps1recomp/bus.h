@@ -51,6 +51,15 @@ void bus_wram_write8(uint32_t offset, uint8_t val);
 void bus_wram_write16(uint32_t offset, uint16_t val);
 void bus_wram_write32(uint32_t offset, uint32_t val);
 
+/* ----- VBlank Sync Hook ----- */
+
+/*
+ * Set a callback that fires when the game's main loop reads the
+ * VBlank flag. This lets the runtime render a frame and sync timing
+ * when the game is waiting for VBlank in an infinite loop.
+ */
+void bus_set_vblank_hook(void (*hook)(void));
+
 /* ----- Direct Pointers (for tools/analysis) ----- */
 
 const uint8_t *bus_get_rom_ptr(void);

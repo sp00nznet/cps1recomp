@@ -8,6 +8,65 @@
 
 static uint32_t s_framebuffer[CPS1_SCREEN_WIDTH * CPS1_SCREEN_HEIGHT];
 static bool s_initialized = false;
+static int s_frame_count = 0;
+
+/*
+ * VBlank hook: called when the game's main loop reads the VBlank flag.
+ * We render the current frame, present it, poll input, and set the
+ * VBlank flag so the game loop continues processing.
+ */
+static void cps1_vblank_hook(void) {
+    if (s_frame_count == 0) {
+        printf("[hook] VBlank hook fired! A5=$%08X\n", g_m68k.a[5]);
+        fflush(stdout);
+    }
+    /* Render current state */
+    video_render_frame(s_framebuffer);
+    platform_present(s_framebuffer);
+
+    /* Poll input */
+    if (!platform_poll_input()) {
+        cps1_shutdown();
+        exit(0);
+    }
+
+    /* Frame sync */
+    platform_frame_sync();
+
+    /* Set the VBlank flag so the game's main loop proceeds */
+    bus_wram_write8(0x020E, 0xFF);
+
+    /* BMP dump on frame 120 (~2 seconds in, should have attract mode started) */
+    if (s_frame_count == 120) {
+        FILE *bmp = fopen("sf2_frame.bmp", "wb");
+        if (bmp) {
+            int w = CPS1_SCREEN_WIDTH, h = CPS1_SCREEN_HEIGHT;
+            int img_size = w * h * 4;
+            int file_size = 54 + img_size;
+            uint8_t hdr[54] = {0};
+            hdr[0]='B'; hdr[1]='M';
+            hdr[2]=file_size; hdr[3]=file_size>>8; hdr[4]=file_size>>16; hdr[5]=file_size>>24;
+            hdr[10]=54; hdr[14]=40;
+            hdr[18]=w; hdr[19]=w>>8; hdr[22]=h; hdr[23]=h>>8;
+            hdr[26]=1; hdr[28]=32;
+            hdr[34]=img_size; hdr[35]=img_size>>8; hdr[36]=img_size>>16; hdr[37]=img_size>>24;
+            fwrite(hdr, 1, 54, bmp);
+            for (int y = h - 1; y >= 0; y--) {
+                for (int x = 0; x < w; x++) {
+                    uint32_t px = s_framebuffer[y * w + x];
+                    uint8_t bgra[4] = { (uint8_t)(px), (uint8_t)(px>>8), (uint8_t)(px>>16), (uint8_t)(px>>24) };
+                    fwrite(bgra, 1, 4, bmp);
+                }
+            }
+            fclose(bmp);
+        }
+    }
+
+    if (s_frame_count < 5 || s_frame_count % 300 == 0) {
+        printf("[frame %d]\n", s_frame_count); fflush(stdout);
+    }
+    s_frame_count++;
+}
 
 int cps1_init(const cps1_config_t *config) {
     printf("cps1recomp v%d.%d.%d\n",
@@ -162,44 +221,78 @@ void cps1_run(void) {
         printf("[cps1] CPS-A/B registers configured\n"); fflush(stdout);
     }
 
-    /* Now run the entry point — with LEA+BRA fix, it should execute
-     * the full init chain including memory clears and GFX setup. */
-    printf("[cps1] Running entry point at $%06X...\n", g_m68k.pc);
-    fflush(stdout);
-    if (func_table_lookup(g_m68k.pc)) {
-        func_table_call(g_m68k.pc);
-    }
-    printf("[cps1] Entry point returned\n"); fflush(stdout);
+    /* Run the full init chain from entry point.
+     * The LEA+BRA fix lets the init subroutines work correctly.
+     * After init, we call sub_000910 which is the main loop setup
+     * that initializes task slots and enters the game loop. */
+    /* Run init chain — call entry point and fall-through functions */
+    printf("[cps1] Running init...\n"); fflush(stdout);
 
-    /* Find VBlank handler from the vector table */
-    const uint8_t *rom = bus_get_rom_ptr();
-    uint32_t vblank_addr = 0;
-    if (rom) {
-        /* IRQ2 vector is at $68 in the 68K vector table */
-        vblank_addr = ((uint32_t)rom[0x68] << 24) | ((uint32_t)rom[0x69] << 16) |
-                      ((uint32_t)rom[0x6A] << 8)  | rom[0x6B];
-    }
-    printf("[cps1] VBlank handler: $%06X (%s)\n", vblank_addr,
-           func_table_lookup(vblank_addr) ? "registered" : "NOT FOUND");
-    fflush(stdout);
+    /* Set up A5 and A7 as the init code would */
+    g_m68k.a[5] = 0xFF8000;
+    g_m68k.a[7] = 0xFF0000;
 
-    /* Main frame loop */
+    /* Run entry_point and fall-through init functions */
+    uint32_t init_addrs[] = {
+        0x00040E, 0x00041C, 0x000426, 0x000448, 0x000476,
+        0x000500, 0x000512,
+    };
+    for (int i = 0; i < (int)(sizeof(init_addrs)/sizeof(init_addrs[0])); i++) {
+        cps1_func_t fn = func_table_lookup(init_addrs[i]);
+        if (fn) fn();
+    }
+    printf("[cps1] Init functions done\n"); fflush(stdout);
+
+    /*
+     * Install VBlank hook: when the game's main loop reads the VBlank
+     * flag (at Work RAM offset $020E), we render a frame, present it,
+     * poll input, and set the flag so the game continues.
+     *
+     * This turns the game's infinite VBlank-wait loop into our frame loop.
+     */
+    bus_set_vblank_hook(cps1_vblank_hook);
+
+    printf("[cps1] VBlank hook installed\n"); fflush(stdout);
+
+    /* Call $0006A6's remaining init (scroll register setup) without
+     * the JMP $910 at the end — we handle that ourselves */
+    {
+        /* $0006A6 sets up scroll shadow registers in Work RAM.
+         * We replicate the essential writes. */
+        uint8_t *wram = bus_get_wram_ptr();
+        /* A5-relative offsets (A5=$FF8000, so wram offset = A5_offset + $8000) */
+        #define WR16(off, val) do { wram[0x8000+(off)] = (uint8_t)((val)>>8); wram[0x8000+(off)+1] = (uint8_t)(val); } while(0)
+        WR16(0x2A, 0x9100);  /* scroll1 base shadow */
+        WR16(0x2C, 0x90C0);  /* scroll2 base shadow */
+        WR16(0x2E, 0x9040);  /* scroll3 base shadow */
+        WR16(0x30, 0x9080);  /* sprite base shadow */
+        WR16(0x32, 0x9200);  /* palette base shadow */
+        WR16(0x34, 0x9000);  /* other base shadow */
+        WR16(0x4C, 0x003F);
+        WR16(0x52, 0x12DA);
+        WR16(0x5C, 0x003F);
+        #undef WR16
+    }
+
+    printf("[cps1] Calling main loop ($000910)...\n"); fflush(stdout);
+
+    /* This call enters the game's infinite main loop.
+     * The VBlank hook fires each time the game reads the VBlank flag,
+     * rendering and presenting a frame. This call never returns. */
+    if (func_table_lookup(0x000910)) {
+        func_table_call(0x000910);
+    }
+
+    printf("[cps1] Main loop returned (unexpected)\n"); fflush(stdout);
+
+    /* Fallback frame loop */
     int frame = 0;
     while (true) {
-        cps1_begin_frame();
-
-        /* Run VBlank handler */
-        if (vblank_addr && func_table_lookup(vblank_addr)) {
-            func_table_call(vblank_addr);
-        }
-
-        /* Render + present */
         video_render_frame(s_framebuffer);
         platform_present(s_framebuffer);
         if (!platform_poll_input()) exit(0);
         platform_frame_sync();
 
-        /* Dump framebuffer to BMP on frame 1 for debugging */
         if (frame == 1) {
             FILE *bmp = fopen("sf2_frame.bmp", "wb");
             if (bmp) {

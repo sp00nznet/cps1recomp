@@ -21,6 +21,16 @@ static uint8_t *s_rom = NULL;       /* Program ROM (up to 4 MB) */
 static uint32_t s_rom_size = 0;
 static uint8_t s_wram[0x10000];     /* 64 KB work RAM ($FF0000-$FFFFFF) */
 
+/*
+ * VBlank sync hook: called when the game's main loop reads the VBlank
+ * flag at $FF020E (= -$7DF2 offset from A5=$FF8000).
+ * This allows us to yield to the frame loop, render, and present.
+ */
+static void (*s_vblank_hook)(void) = NULL;
+void bus_set_vblank_hook(void (*hook)(void)) { s_vblank_hook = hook; }
+
+#define VBLANK_FLAG_ADDR 0x020E  /* Offset in Work RAM */
+
 int bus_init(void) {
     memset(s_wram, 0, sizeof(s_wram));
     return 0;
@@ -63,8 +73,15 @@ static inline void be_write32(uint8_t *p, uint32_t val) {
 
 /* --- Address-decoded bus access --- */
 
+static int s_read8_count = 0;
+
 uint8_t bus_read8(uint32_t addr) {
     addr &= 0xFFFFFF;  /* 24-bit address bus */
+    s_read8_count++;
+    if (s_read8_count <= 3 && addr >= 0xFF0000) {
+        fprintf(stderr, "[bus] read8 #%d: $%06X\n", s_read8_count, addr);
+        fflush(stderr);
+    }
 
     /* Program ROM */
     if (addr < s_rom_size) {
@@ -95,7 +112,12 @@ uint8_t bus_read8(uint32_t addr) {
 
     /* Work RAM */
     if (addr >= 0xFF0000) {
-        return s_wram[addr & 0xFFFF];
+        uint32_t offset = addr & 0xFFFF;
+        /* VBlank flag intercept */
+        if (offset == VBLANK_FLAG_ADDR && s_vblank_hook) {
+            s_vblank_hook();
+        }
+        return s_wram[offset];
     }
 
     debug_log("[bus] Unmapped read8: $%06X\n", addr);
@@ -267,7 +289,15 @@ void bus_write32(uint32_t addr, uint32_t val) {
 /* --- Fast Work RAM accessors --- */
 
 uint8_t bus_wram_read8(uint32_t offset) {
-    return s_wram[offset & 0xFFFF];
+    offset &= 0xFFFF;
+
+    /* VBlank flag intercept: when the main loop reads this byte,
+     * we yield to the frame loop (render, present, sync). */
+    if (offset == VBLANK_FLAG_ADDR && s_vblank_hook) {
+        s_vblank_hook();
+    }
+
+    return s_wram[offset];
 }
 
 uint16_t bus_wram_read16(uint32_t offset) {
