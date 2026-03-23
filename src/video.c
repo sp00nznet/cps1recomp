@@ -490,7 +490,23 @@ static void render_sprites(uint32_t *fb, const uint32_t *argb) {
 /* ----- Frame Rendering ----- */
 
 void video_render_frame(uint32_t *framebuffer) {
-    const uint32_t *argb = palette_get_argb_table();
+    /*
+     * Build palette from GFX RAM at the CPS-A "other" base.
+     * The palette module may not have been updated if writes went through
+     * byte paths or to unexpected offsets.  Reading directly from GFX RAM
+     * ensures we always see the current palette state.
+     */
+    static uint32_t live_palette[CPS1_TOTAL_COLORS];
+    {
+        uint16_t other_reg = s_cps_a[CPS_A_OTHER_BASE / 2];
+        uint32_t pal_offset = (uint32_t)(other_reg & 0x1FF) << 8;
+        for (int i = 0; i < CPS1_TOTAL_COLORS && (pal_offset + i * 2 + 1) < CPS1_GFXRAM_SIZE; i++) {
+            uint16_t raw = ((uint16_t)s_gfxram[pal_offset + i * 2] << 8)
+                         | s_gfxram[pal_offset + i * 2 + 1];
+            live_palette[i] = palette_cps1_to_argb(raw);
+        }
+    }
+    const uint32_t *argb = live_palette;
 
     /* Fill with black (palette entry 0 could be the backdrop) */
     uint32_t backdrop = argb[0];

@@ -223,6 +223,10 @@ void bus_write8(uint32_t addr, uint8_t val) {
             cur = ((uint16_t)val << 8) | (cur & 0x00FF);  /* High byte */
         }
         video_gfxram_write(offset & ~1u, cur);
+        /* Update palette if in palette region (same as write16 path) */
+        if (addr >= 0x920000 && addr < 0x920C00) {
+            palette_write((addr & ~1u) - 0x920000, cur);
+        }
         return;
     }
 
