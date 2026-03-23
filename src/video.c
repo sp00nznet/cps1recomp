@@ -178,55 +178,31 @@ static void draw_8x8_tile(
 {
     if (!s_gfx_data || s_gfx_size == 0) return;
 
-    /* In the deinterleaved GFX data, tiles are organized by ROM group.
-     * The data has two halves per group: bp01 data, then bp23 data.
-     * Each ROM group produces (rom_size * 2) bytes of bp01 and bp23.
+    /*
+     * MAME-compatible GFX format (after ROM_GROUPWORD|ROM_SKIP(6) + gfx_decode):
      *
-     * For tile lookup, we treat the data as a flat array of 8x8 tiles.
-     * Each tile = 64 bytes in the interleaved format:
-     *   32 bytes from bp01 section + 32 bytes from bp23 section.
+     * The GFX data is a flat array.  Each 8x8 tile occupies 16 bytes
+     * (2 bytes per row × 8 rows), stored at tile_num × 16.
      *
-     * Actually, with our deinterleaving scheme, bp01 and bp23 are
-     * stored sequentially per group. Let's use a simpler approach:
-     * treat each 8x8 tile as having its data distributed across the
-     * two halves of each ROM group.
+     * Each row's 2 bytes encode 8 pixels at 4bpp.  After the MAME nibble
+     * shuffle, the bits are arranged for GFX_RAW access.  Empirically,
+     * the pixel extraction for CPS1 tiles is:
      *
-     * For now, use a direct 4bpp packed format approach.
-     * Each pixel = 4 bits, each row = 4 bytes (8 pixels * 4 bits = 32 bits).
-     * Each 8x8 tile = 32 bytes.
+     *   For each pixel column (0-7), bit = 7 - col:
+     *     plane 0 = (byte0 >> bit) & 1
+     *     plane 1 = (byte1 >> bit) & 1
+     *
+     * And the other 2 bitplanes come from a separate tile within the
+     * 8-byte stride.  However, in MAME's decoded format, each 8x8 tile
+     * is 128 bytes (8 bytes per row × 8 rows × 2 = 16 per row?).
+     *
+     * Actually: with 4-way interleave, each tile row = 8 bytes
+     * (2 from each ROM).  8 rows × 8 bytes = 64 bytes per 8x8 tile.
      */
+    uint32_t tile_offset = (uint32_t)tile_num * 64;
+    if (tile_offset + 64 > s_gfx_size) return;
 
-    /* Group size: each group has 4 ROMs of 512KB each = 2MB per group,
-     * producing 2MB of bp01 + 2MB of bp23 = 4MB per group.
-     * With 3 groups, total = 12MB.
-     * But our deinterleaved data is: [group0_bp01, group0_bp23, group1_bp01, ...] */
-    uint32_t rom_pair_size = 0x100000;  /* 2 * 512KB = 1MB per interleaved pair */
-    uint32_t group_total = rom_pair_size * 2;  /* bp01 + bp23 = 2MB per group */
-    uint32_t total_groups = s_gfx_size / group_total;
-    if (total_groups == 0) total_groups = 1;
-
-    /* Each 8x8 tile in the interleaved data:
-     * Tiles are numbered sequentially within each ROM pair.
-     * Each tile has 16 bytes in each pair (8 rows * 2 bytes per row).
-     * bp01 pair: 16 bytes per tile (2 bytes per row * 8 rows)
-     * bp23 pair: 16 bytes per tile */
-    uint32_t tiles_per_pair = rom_pair_size / 16;
-
-    /* Which group and local tile index? */
-    uint32_t group = (tile_num / tiles_per_pair);
-    uint32_t local_tile = tile_num % tiles_per_pair;
-
-    if (group >= total_groups) return;
-
-    uint32_t bp01_base = group * group_total;
-    uint32_t bp23_base = bp01_base + rom_pair_size;
-    uint32_t tile_off = local_tile * 16;
-
-    if (bp23_base + tile_off + 16 > s_gfx_size) return;
-
-    const uint8_t *bp01 = s_gfx_data + bp01_base + tile_off;
-    const uint8_t *bp23 = s_gfx_data + bp23_base + tile_off;
-
+    const uint8_t *tile_data = s_gfx_data + tile_offset;
     int pal_base = palette_idx * CPS1_COLORS_PER_PAL;
 
     for (int row = 0; row < 8; row++) {
@@ -234,23 +210,36 @@ static void draw_8x8_tile(
         int py = y + row;
         if (py < 0 || py >= CPS1_SCREEN_HEIGHT) continue;
 
-        /* Each row: 2 bytes from bp01 (interleaved from two ROMs) */
-        uint8_t b0 = bp01[src_row * 2 + 0];  /* ROM even: bp0 bits for 8 pixels */
-        uint8_t b1 = bp01[src_row * 2 + 1];  /* ROM odd: bp1 bits for 8 pixels */
-        uint8_t b2 = bp23[src_row * 2 + 0];  /* ROM even: bp2 bits for 8 pixels */
-        uint8_t b3 = bp23[src_row * 2 + 1];  /* ROM odd: bp3 bits for 8 pixels */
+        /* Each row: 8 bytes (2 from each of 4 ROM positions) */
+        const uint8_t *rp = tile_data + src_row * 8;
+        uint8_t b0 = rp[0];  /* ROM0 even byte */
+        uint8_t b1 = rp[1];  /* ROM0 odd byte */
+        uint8_t b2 = rp[2];  /* ROM1 even byte */
+        uint8_t b3 = rp[3];  /* ROM1 odd byte */
+        uint8_t b4 = rp[4];  /* ROM2 even byte */
+        uint8_t b5 = rp[5];  /* ROM2 odd byte */
+        uint8_t b6 = rp[6];  /* ROM3 even byte */
+        uint8_t b7 = rp[7];  /* ROM3 odd byte */
 
         for (int col = 0; col < 8; col++) {
             int src_col = flip_x ? (7 - col) : col;
             int px = x + col;
             if (px < 0 || px >= CPS1_SCREEN_WIDTH) continue;
 
-            int bit = 7 - src_col;  /* MSB first */
+            int bit = 7 - src_col;
 
+            /* CPS1 4bpp: extract one bit from each of 4 bitplane bytes.
+             * The nibble shuffle rearranges which bytes hold which planes.
+             * After gfx_decode, the mapping is:
+             *   plane 0: byte 0 (b0)
+             *   plane 2: byte 2 (b2)
+             *   plane 1: byte 4 (b4)
+             *   plane 3: byte 6 (b6)
+             * (odd bytes b1,b3,b5,b7 provide the second column set) */
             uint8_t pixel = ((b0 >> bit) & 1) << 0 |
-                            ((b1 >> bit) & 1) << 1 |
-                            ((b2 >> bit) & 1) << 2 |
-                            ((b3 >> bit) & 1) << 3;
+                            ((b2 >> bit) & 1) << 1 |
+                            ((b4 >> bit) & 1) << 2 |
+                            ((b6 >> bit) & 1) << 3;
 
             if (pixel == 0) continue;  /* Transparent */
 
