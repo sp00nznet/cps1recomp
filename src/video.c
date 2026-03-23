@@ -306,9 +306,10 @@ static void draw_16x16_tile(
  * Render Scroll 1 (8x8 tile layer, typically HUD/text).
  *
  * Scroll 1 tilemap in GFX RAM:
- *   Each entry = 16 bits: [tile_number:12][palette:4] or similar
- *   The layout is 64x64 tiles wrapping.
- *   Scroll offsets from CPS-A registers control the viewport.
+ *   Same 2-word (4 byte) format as scroll 2/3 but with 8x8 tiles.
+ *   Word 0: tile code (16 bits)
+ *   Word 1: palette[4:0], flip_x[5], flip_y[6]
+ *   Layout: 64x64 tiles, column-major addressing.
  */
 /*
  * Helper: extract GFX RAM base address from a CPS-A base register value.
@@ -323,7 +324,8 @@ static void render_scroll1(uint32_t *fb, const uint32_t *argb) {
     uint16_t base_reg = s_cps_a[CPS_A_SCROLL1_BASE / 2];
     uint32_t tilemap_base = gfxram_base_from_reg(base_reg);
 
-    int scroll_x = (int16_t)s_cps_a[CPS_A_SCROLL1_X / 2];
+    /* CPS1 scroll registers have inherent hardware offsets */
+    int scroll_x = (int16_t)s_cps_a[CPS_A_SCROLL1_X / 2] + 0x40;
     int scroll_y = (int16_t)s_cps_a[CPS_A_SCROLL1_Y / 2];
 
     /* Scroll 1 is 64x64 tiles of 8x8 pixels = 512x512 pixel virtual area */
@@ -338,22 +340,22 @@ static void render_scroll1(uint32_t *fb, const uint32_t *argb) {
             int map_col = (start_col + col) & 63;  /* Wrap at 64 */
             int map_row = (start_row + row) & 63;
 
-            /* Tilemap address: base + (col * 64 + row) * 2 (CPS1 uses column-major) */
-            uint32_t map_offset = tilemap_base + ((uint32_t)(map_col * 64 + map_row) * 2);
-            uint16_t entry = gfxram_read16(map_offset);
+            /* 4 bytes per entry (2 words), column-major */
+            uint32_t map_offset = tilemap_base + ((uint32_t)(map_col * 64 + map_row) * 4);
+            uint16_t word0 = gfxram_read16(map_offset);
+            uint16_t word1 = gfxram_read16(map_offset + 2);
 
-            /* Entry format: tile[15:6] | palette[5:1] | flip_x[0]
-             * Actually CPS1 scroll1 format varies. Common format:
-             *   bits 15-0: tile number (can be up to 16 bits for scroll1 8x8) */
-            uint16_t tile_num = entry & 0x1FFF;  /* 13-bit tile number */
-            int palette_idx = (entry >> 13) & 0x7;  /* 3-bit palette (from CPS-B?) */
+            uint16_t tile_num = word0;
+            int palette_idx = word1 & 0x1F;
+            bool flip_x = (word1 & 0x20) != 0;
+            bool flip_y = (word1 & 0x40) != 0;
 
             if (tile_num == 0) continue;
 
             int px = col * 8 - off_x;
             int py = row * 8 - off_y;
 
-            draw_8x8_tile(fb, tile_num, palette_idx, false, false, px, py, argb);
+            draw_8x8_tile(fb, tile_num, palette_idx, flip_x, flip_y, px, py, argb);
         }
     }
 }
@@ -365,7 +367,7 @@ static void render_scroll2(uint32_t *fb, const uint32_t *argb) {
     uint16_t base_reg = s_cps_a[CPS_A_SCROLL2_BASE / 2];
     uint32_t tilemap_base = gfxram_base_from_reg(base_reg);
 
-    int scroll_x = (int16_t)s_cps_a[CPS_A_SCROLL2_X / 2];
+    int scroll_x = (int16_t)s_cps_a[CPS_A_SCROLL2_X / 2] + 0x3E;
     int scroll_y = (int16_t)s_cps_a[CPS_A_SCROLL2_Y / 2];
 
     /* Scroll 2: 64x64 tiles of 16x16 pixels = 1024x1024 virtual area */
@@ -385,11 +387,11 @@ static void render_scroll2(uint32_t *fb, const uint32_t *argb) {
 
             /* Scroll 2/3 entry (2 words):
              * Word 0: tile number (16 bits)
-             * Word 1: [palette:5][flip_y:1][flip_x:1][???:9] (varies by CPS-B) */
+             * Word 1: palette[4:0], flip_x[5], flip_y[6], rest varies by CPS-B */
             uint16_t tile_num = word0;
-            int palette_idx = (word1 >> 5) & 0x1F;  /* 5-bit palette */
-            bool flip_x = (word1 & 0x10) != 0;
-            bool flip_y = (word1 & 0x20) != 0;
+            int palette_idx = word1 & 0x1F;            /* bits 0-4: palette */
+            bool flip_x = (word1 & 0x20) != 0;         /* bit 5 */
+            bool flip_y = (word1 & 0x40) != 0;         /* bit 6 */
 
             if (tile_num == 0) continue;
 
@@ -409,7 +411,7 @@ static void render_scroll3(uint32_t *fb, const uint32_t *argb) {
     uint16_t base_reg = s_cps_a[CPS_A_SCROLL3_BASE / 2];
     uint32_t tilemap_base = gfxram_base_from_reg(base_reg);
 
-    int scroll_x = (int16_t)s_cps_a[CPS_A_SCROLL3_X / 2];
+    int scroll_x = (int16_t)s_cps_a[CPS_A_SCROLL3_X / 2] + 0x40;
     int scroll_y = (int16_t)s_cps_a[CPS_A_SCROLL3_Y / 2];
 
     int start_col = scroll_x / 16;
@@ -427,9 +429,9 @@ static void render_scroll3(uint32_t *fb, const uint32_t *argb) {
             uint16_t word1 = gfxram_read16(map_offset + 2);
 
             uint16_t tile_num = word0;
-            int palette_idx = (word1 >> 5) & 0x1F;
-            bool flip_x = (word1 & 0x10) != 0;
-            bool flip_y = (word1 & 0x20) != 0;
+            int palette_idx = word1 & 0x1F;
+            bool flip_x = (word1 & 0x20) != 0;
+            bool flip_y = (word1 & 0x40) != 0;
 
             if (tile_num == 0) continue;
 
@@ -479,9 +481,9 @@ static void render_sprites(uint32_t *fb, const uint32_t *argb) {
         if (x >= 384) x -= 512;
         if (y >= 224) y -= 512;
 
-        int palette_idx = (w2 >> 5) & 0x1F;
-        bool flip_x = (w2 & 0x10) != 0;
-        bool flip_y = (w2 & 0x20) != 0;
+        int palette_idx = w2 & 0x1F;             /* bits 0-4: palette */
+        bool flip_x = (w2 & 0x20) != 0;         /* bit 5 */
+        bool flip_y = (w2 & 0x40) != 0;         /* bit 6 */
 
         draw_16x16_tile(fb, tile_num, palette_idx, flip_x, flip_y, x, y, argb);
     }

@@ -37,7 +37,7 @@ static void cps1_vblank_hook(void) {
     /* Set the VBlank flag so the game's main loop proceeds */
     bus_wram_write8(0x020E, 0xFF);
 
-    /* BMP dump on frame 120 */
+    /* BMP dump at frame 120 (~2 seconds in) */
     if (s_frame_count == 120) {
         FILE *bmp = fopen("sf2_frame.bmp", "wb");
         if (bmp) {
