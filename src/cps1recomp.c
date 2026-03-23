@@ -37,74 +37,7 @@ static void cps1_vblank_hook(void) {
     /* Set the VBlank flag so the game's main loop proceeds */
     bus_wram_write8(0x020E, 0xFF);
 
-    /* Diagnostic: track state machine and key flags */
-    if (s_frame_count == 120 || s_frame_count == 300 || s_frame_count == 600 || s_frame_count == 900) {
-        uint8_t *wram = bus_get_wram_ptr();
-        uint16_t state = ((uint16_t)wram[0x8000] << 8) | wram[0x8001];
-        uint8_t f2e0 = wram[0x8000 + 0x2e0];
-        uint8_t f5d59 = wram[0x8000 + 0x5d59];
-        int active = 0;
-        for (int i = 0; i < 16; i++) {
-            uint8_t st = wram[i * 0x20];
-            if (st) active++;
-        }
-        uint32_t cnt_5d3a = ((uint32_t)wram[0x8000+0x5d3a] << 24) |
-                             ((uint32_t)wram[0x8000+0x5d3b] << 16) |
-                             ((uint32_t)wram[0x8000+0x5d3c] << 8) |
-                             wram[0x8000+0x5d3d];
-        FILE *df = fopen("sf2_diag.txt", "a");
-        if (df) {
-            extern int func_table_miss_count(void);
-            fprintf(df, "frame=%d state=%u 5d59=%u 5d56=%u cnt=%u active=%d miss=%d\n",
-                    s_frame_count, state, f5d59,
-                    wram[0x8000+0x5d56], cnt_5d3a, active,
-                    func_table_miss_count());
-            /* Queue at A5+$A2 */
-            uint16_t q_idx = ((uint16_t)wram[0x8000+0x20]<<8) | wram[0x8000+0x21];
-            uint16_t q_write = ((uint16_t)wram[0x8000+0x1e]<<8) | wram[0x8000+0x1f];
-            uint32_t q0 = ((uint32_t)wram[0x80A2]<<24)|((uint32_t)wram[0x80A3]<<16)|((uint32_t)wram[0x80A4]<<8)|wram[0x80A5];
-            uint32_t q1 = ((uint32_t)wram[0x80A6]<<24)|((uint32_t)wram[0x80A7]<<16)|((uint32_t)wram[0x80A8]<<8)|wram[0x80A9];
-            fprintf(df, "  queue: ridx=%u widx=%u q[0]=$%08X q[1]=$%08X\n", q_idx, q_write, q0, q1);
-            /* Dump active slots */
-            for (int i = 0; i < 16; i++) {
-                uint8_t st = wram[i * 0x20];
-                if (st) {
-                    uint32_t code = ((uint32_t)wram[i*0x20+4]<<24) | ((uint32_t)wram[i*0x20+5]<<16) |
-                                    ((uint32_t)wram[i*0x20+6]<<8) | wram[i*0x20+7];
-                    uint16_t p10 = ((uint16_t)wram[i*0x20+0x10]<<8) | wram[i*0x20+0x11];
-                    fprintf(df, "  slot%d: st=0x%02X code=$%06X p10=0x%04X\n", i, st, code, p10);
-                }
-            }
-            fclose(df);
-        }
-    }
-    /* BMP dump at frame 120 */
-    if (s_frame_count == 120) {
-        FILE *bmp = fopen("sf2_frame.bmp", "wb");
-        if (bmp) {
-            int w = CPS1_SCREEN_WIDTH, h = CPS1_SCREEN_HEIGHT;
-            int img_size = w * h * 4;
-            int file_size = 54 + img_size;
-            uint8_t hdr[54] = {0};
-            hdr[0]='B'; hdr[1]='M';
-            hdr[2]=file_size; hdr[3]=file_size>>8; hdr[4]=file_size>>16; hdr[5]=file_size>>24;
-            hdr[10]=54; hdr[14]=40;
-            hdr[18]=w; hdr[19]=w>>8; hdr[22]=h; hdr[23]=h>>8;
-            hdr[26]=1; hdr[28]=32;
-            hdr[34]=img_size; hdr[35]=img_size>>8; hdr[36]=img_size>>16; hdr[37]=img_size>>24;
-            fwrite(hdr, 1, 54, bmp);
-            for (int y = h - 1; y >= 0; y--) {
-                for (int x = 0; x < w; x++) {
-                    uint32_t px = s_framebuffer[y * w + x];
-                    uint8_t bgra[4] = { (uint8_t)(px), (uint8_t)(px>>8), (uint8_t)(px>>16), (uint8_t)(px>>24) };
-                    fwrite(bgra, 1, 4, bmp);
-                }
-            }
-            fclose(bmp);
-        }
-    }
-
-    if (s_frame_count < 5 || s_frame_count % 300 == 0) {
+    if (s_frame_count < 3 || s_frame_count % 600 == 0) {
         printf("[frame %d]\n", s_frame_count); fflush(stdout);
     }
     s_frame_count++;
@@ -334,44 +267,6 @@ void cps1_run(void) {
         platform_present(s_framebuffer);
         if (!platform_poll_input()) exit(0);
         platform_frame_sync();
-
-        if (frame == 1) {
-            FILE *bmp = fopen("sf2_frame.bmp", "wb");
-            if (bmp) {
-                /* Write minimal BMP header (384x224, 32bpp) */
-                int w = CPS1_SCREEN_WIDTH, h = CPS1_SCREEN_HEIGHT;
-                int row_bytes = w * 4;
-                int img_size = row_bytes * h;
-                int file_size = 54 + img_size;
-                uint8_t hdr[54] = {0};
-                hdr[0]='B'; hdr[1]='M';
-                hdr[2]=file_size; hdr[3]=file_size>>8; hdr[4]=file_size>>16; hdr[5]=file_size>>24;
-                hdr[10]=54;
-                hdr[14]=40; /* DIB header size */
-                hdr[18]=w; hdr[19]=w>>8;
-                hdr[22]=h; hdr[23]=h>>8; /* positive = bottom-up */
-                hdr[26]=1; /* planes */
-                hdr[28]=32; /* bpp */
-                hdr[34]=img_size; hdr[35]=img_size>>8; hdr[36]=img_size>>16; hdr[37]=img_size>>24;
-                fwrite(hdr, 1, 54, bmp);
-                /* BMP is bottom-up, ARGB -> BGRA */
-                for (int y = h - 1; y >= 0; y--) {
-                    for (int x = 0; x < w; x++) {
-                        uint32_t px = s_framebuffer[y * w + x];
-                        uint8_t bgra[4] = {
-                            (uint8_t)(px),         /* B */
-                            (uint8_t)(px >> 8),    /* G */
-                            (uint8_t)(px >> 16),   /* R */
-                            (uint8_t)(px >> 24)    /* A */
-                        };
-                        fwrite(bgra, 1, 4, bmp);
-                    }
-                }
-                fclose(bmp);
-                printf("[frame %d] Saved framebuffer to sf2_frame.bmp\n", frame);
-                fflush(stdout);
-            }
-        }
 
         if (frame < 3 || frame % 600 == 0) {
             printf("[frame %d]\n", frame); fflush(stdout);

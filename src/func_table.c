@@ -69,13 +69,9 @@ void func_table_call(uint32_t addr) {
         func();
     } else {
         s_miss_count++;
-        if (s_miss_count <= 100) {
+        if (s_miss_count <= 20) {
             fprintf(stderr, "[func_table] MISS #%d: no function at $%06X\n", s_miss_count, addr);
             fflush(stderr);
-        }
-        if (s_miss_count <= 20) {
-            FILE *mf = fopen("sf2_miss.txt", "a");
-            if (mf) { fprintf(mf, "MISS #%d: $%06X\n", s_miss_count, addr); fclose(mf); }
         }
     }
 }

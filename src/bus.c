@@ -86,9 +86,12 @@ uint8_t bus_read8(uint32_t addr) {
         fflush(stderr);
     }
 
-    /* Program ROM */
+    /* Program ROM (unmapped ROM space reads as 0, matching MAME) */
     if (addr < s_rom_size) {
         return s_rom[addr];
+    }
+    if (addr < 0x400000) {
+        return 0;  /* Unmapped ROM space */
     }
 
     /* CPS-A registers */
@@ -133,6 +136,9 @@ uint16_t bus_read16(uint32_t addr) {
 
     if (addr < s_rom_size) {
         return be_read16(s_rom + addr);
+    }
+    if (addr < 0x400000) {
+        return 0;  /* Unmapped ROM space */
     }
 
     /* CPS1 I/O and register space ($800000-$8001FF) */
