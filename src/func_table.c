@@ -59,6 +59,7 @@ void func_table_register(uint32_t addr, cps1_func_t func) {
 }
 
 static int s_miss_count = 0;
+int func_table_miss_count(void) { return s_miss_count; }
 
 void func_table_call(uint32_t addr) {
     if (addr == 0) return;  /* Skip null calls */
@@ -71,6 +72,10 @@ void func_table_call(uint32_t addr) {
         if (s_miss_count <= 100) {
             fprintf(stderr, "[func_table] MISS #%d: no function at $%06X\n", s_miss_count, addr);
             fflush(stderr);
+        }
+        if (s_miss_count <= 20) {
+            FILE *mf = fopen("sf2_miss.txt", "a");
+            if (mf) { fprintf(mf, "MISS #%d: $%06X\n", s_miss_count, addr); fclose(mf); }
         }
     }
 }

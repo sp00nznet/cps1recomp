@@ -37,7 +37,48 @@ static void cps1_vblank_hook(void) {
     /* Set the VBlank flag so the game's main loop proceeds */
     bus_wram_write8(0x020E, 0xFF);
 
-    /* BMP dump at frame 120 (~2 seconds in) */
+    /* Diagnostic: track state machine and key flags */
+    if (s_frame_count == 120 || s_frame_count == 300 || s_frame_count == 600 || s_frame_count == 900) {
+        uint8_t *wram = bus_get_wram_ptr();
+        uint16_t state = ((uint16_t)wram[0x8000] << 8) | wram[0x8001];
+        uint8_t f2e0 = wram[0x8000 + 0x2e0];
+        uint8_t f5d59 = wram[0x8000 + 0x5d59];
+        int active = 0;
+        for (int i = 0; i < 16; i++) {
+            uint8_t st = wram[i * 0x20];
+            if (st) active++;
+        }
+        uint32_t cnt_5d3a = ((uint32_t)wram[0x8000+0x5d3a] << 24) |
+                             ((uint32_t)wram[0x8000+0x5d3b] << 16) |
+                             ((uint32_t)wram[0x8000+0x5d3c] << 8) |
+                             wram[0x8000+0x5d3d];
+        FILE *df = fopen("sf2_diag.txt", "a");
+        if (df) {
+            extern int func_table_miss_count(void);
+            fprintf(df, "frame=%d state=%u 5d59=%u 5d56=%u cnt=%u active=%d miss=%d\n",
+                    s_frame_count, state, f5d59,
+                    wram[0x8000+0x5d56], cnt_5d3a, active,
+                    func_table_miss_count());
+            /* Queue at A5+$A2 */
+            uint16_t q_idx = ((uint16_t)wram[0x8000+0x20]<<8) | wram[0x8000+0x21];
+            uint16_t q_write = ((uint16_t)wram[0x8000+0x1e]<<8) | wram[0x8000+0x1f];
+            uint32_t q0 = ((uint32_t)wram[0x80A2]<<24)|((uint32_t)wram[0x80A3]<<16)|((uint32_t)wram[0x80A4]<<8)|wram[0x80A5];
+            uint32_t q1 = ((uint32_t)wram[0x80A6]<<24)|((uint32_t)wram[0x80A7]<<16)|((uint32_t)wram[0x80A8]<<8)|wram[0x80A9];
+            fprintf(df, "  queue: ridx=%u widx=%u q[0]=$%08X q[1]=$%08X\n", q_idx, q_write, q0, q1);
+            /* Dump active slots */
+            for (int i = 0; i < 16; i++) {
+                uint8_t st = wram[i * 0x20];
+                if (st) {
+                    uint32_t code = ((uint32_t)wram[i*0x20+4]<<24) | ((uint32_t)wram[i*0x20+5]<<16) |
+                                    ((uint32_t)wram[i*0x20+6]<<8) | wram[i*0x20+7];
+                    uint16_t p10 = ((uint16_t)wram[i*0x20+0x10]<<8) | wram[i*0x20+0x11];
+                    fprintf(df, "  slot%d: st=0x%02X code=$%06X p10=0x%04X\n", i, st, code, p10);
+                }
+            }
+            fclose(df);
+        }
+    }
+    /* BMP dump at frame 120 */
     if (s_frame_count == 120) {
         FILE *bmp = fopen("sf2_frame.bmp", "wb");
         if (bmp) {
