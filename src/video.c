@@ -315,7 +315,7 @@ static void draw_16x16_tile(
  * Example: $90C0 -> ($90C0 << 8) & $2FFFF = $0C000
  */
 static inline uint32_t gfxram_base_from_reg(uint16_t reg_val) {
-    return ((uint32_t)reg_val << 8) & (CPS1_GFXRAM_SIZE - 1);
+    return ((uint32_t)reg_val << 8) % CPS1_GFXRAM_SIZE;
 }
 
 static void render_scroll1(uint32_t *fb, const uint32_t *argb) {
@@ -498,8 +498,8 @@ void video_render_frame(uint32_t *framebuffer) {
      */
     static uint32_t live_palette[CPS1_TOTAL_COLORS];
     {
-        uint16_t other_reg = s_cps_a[CPS_A_OTHER_BASE / 2];
-        uint32_t pal_offset = (uint32_t)(other_reg & 0x1FF) << 8;
+        uint16_t pal_reg = s_cps_a[CPS_A_PALETTE_CTRL / 2];
+        uint32_t pal_offset = gfxram_base_from_reg(pal_reg);
         for (int i = 0; i < CPS1_TOTAL_COLORS && (pal_offset + i * 2 + 1) < CPS1_GFXRAM_SIZE; i++) {
             uint16_t raw = ((uint16_t)s_gfxram[pal_offset + i * 2] << 8)
                          | s_gfxram[pal_offset + i * 2 + 1];

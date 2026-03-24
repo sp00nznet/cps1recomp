@@ -37,8 +37,8 @@ static void cps1_vblank_hook(void) {
     /* Set the VBlank flag so the game's main loop proceeds */
     bus_wram_write8(0x020E, 0xFF);
 
-    /* Capture frame 300 as BMP for visual debugging */
-    if (s_frame_count == 300) {
+    /* Capture frames as BMP + diagnostic dump */
+    if (s_frame_count == 120 || s_frame_count == 300 || s_frame_count == 600) {
         FILE *bmp = fopen("sf2_frame.bmp", "wb");
         if (bmp) {
             int w = CPS1_SCREEN_WIDTH, h = CPS1_SCREEN_HEIGHT;
@@ -60,7 +60,95 @@ static void cps1_vblank_hook(void) {
                 }
             }
             fclose(bmp);
-            printf("[frame %d] Saved sf2_frame.bmp\n", s_frame_count);
+        }
+        /* Dump CPS-A registers, tilemap entries, palette */
+        FILE *df = fopen("sf2_diag.txt", "w");
+        if (df) {
+            fprintf(df, "=== Frame %d diagnostic ===\n", s_frame_count);
+            /* Game state from Work RAM (A5=$FF8000) */
+            uint8_t *wram = bus_get_wram_ptr();
+            uint16_t attract_state = ((uint16_t)wram[0x8000] << 8) | wram[0x8001];
+            uint8_t f5d59 = wram[0x8000 + 0x5d59];
+            uint8_t f5d56 = wram[0x8000 + 0x5d56];
+            fprintf(df, "Game: attract_state=%u 5D59=%u 5D56=%u\n", attract_state, f5d59, f5d56);
+            /* Active task slots */
+            int active = 0;
+            for (int i = 0; i < 16; i++) {
+                uint8_t st = wram[i * 0x20];
+                if (st) { active++; fprintf(df, "  slot%d: status=$%02X\n", i, st); }
+            }
+            fprintf(df, "CPS-A registers:\n");
+            for (int i = 0; i < 16; i++) {
+                uint16_t val = video_read_cps_a(0x100 + i*2);
+                fprintf(df, "  $8001%02X = $%04X\n", i*2, val);
+            }
+            /* Scroll base addresses */
+            uint16_t s1_base = video_read_cps_a(0x100);
+            uint16_t s2_base = video_read_cps_a(0x102);
+            uint16_t s3_base = video_read_cps_a(0x104);
+            uint16_t obj_base = video_read_cps_a(0x106);
+            uint16_t pal_base = video_read_cps_a(0x108);
+            uint16_t other_base = video_read_cps_a(0x10A);
+            fprintf(df, "\nDerived GFX RAM offsets:\n");
+            fprintf(df, "  Scroll1 base: $%04X -> $%05X\n", s1_base, ((uint32_t)s1_base << 8) % 0x30000);
+            fprintf(df, "  Scroll2 base: $%04X -> $%05X\n", s2_base, ((uint32_t)s2_base << 8) % 0x30000);
+            fprintf(df, "  Scroll3 base: $%04X -> $%05X\n", s3_base, ((uint32_t)s3_base << 8) % 0x30000);
+            fprintf(df, "  Object base:  $%04X -> $%05X\n", obj_base, ((uint32_t)obj_base << 8) % 0x30000);
+            fprintf(df, "  Palette base: $%04X -> $%05X\n", pal_base, ((uint32_t)pal_base << 8) % 0x30000);
+            fprintf(df, "  Other base:   $%04X -> $%05X\n", other_base, ((uint32_t)other_base << 8) % 0x30000);
+            /* Scroll offsets */
+            fprintf(df, "\nScroll offsets:\n");
+            fprintf(df, "  Scroll1 X=$%04X Y=$%04X\n", video_read_cps_a(0x10C), video_read_cps_a(0x10E));
+            fprintf(df, "  Scroll2 X=$%04X Y=$%04X\n", video_read_cps_a(0x110), video_read_cps_a(0x112));
+            fprintf(df, "  Scroll3 X=$%04X Y=$%04X\n", video_read_cps_a(0x114), video_read_cps_a(0x116));
+            /* Sample tilemap entries */
+            uint32_t s1_off = ((uint32_t)s1_base << 8) % 0x30000;
+            fprintf(df, "\nScroll1 tilemap (first 8 entries at $%05X):\n", s1_off);
+            for (int i = 0; i < 8; i++) {
+                uint16_t w0 = video_gfxram_read(s1_off + i*4);
+                uint16_t w1 = video_gfxram_read(s1_off + i*4 + 2);
+                fprintf(df, "  [%d] tile=$%04X attr=$%04X\n", i, w0, w1);
+            }
+            uint32_t s2_off = ((uint32_t)s2_base << 8) % 0x30000;
+            fprintf(df, "\nScroll2 tilemap (first 8 entries at $%05X):\n", s2_off);
+            for (int i = 0; i < 8; i++) {
+                uint16_t w0 = video_gfxram_read(s2_off + i*4);
+                uint16_t w1 = video_gfxram_read(s2_off + i*4 + 2);
+                fprintf(df, "  [%d] tile=$%04X attr=$%04X\n", i, w0, w1);
+            }
+            /* Palette data from CPS_A_OTHER_BASE register ($800108) */
+            uint16_t pal_reg = video_read_cps_a(0x108);
+            uint32_t p_off = ((uint32_t)pal_reg << 8) % 0x30000;
+            fprintf(df, "\nPalette (first 32 colors at $%05X):\n", p_off);
+            for (int i = 0; i < 32; i++) {
+                uint16_t c = video_gfxram_read(p_off + i*2);
+                fprintf(df, "  [%2d] $%04X", i, c);
+                if ((i & 7) == 7) fprintf(df, "\n");
+            }
+            /* Scan GFX RAM for non-zero data in palette area */
+            int nz_count = 0;
+            uint32_t first_nz = 0;
+            for (uint32_t i = 0x20000; i < 0x30000; i += 2) {
+                uint16_t v = video_gfxram_read(i);
+                if (v != 0) {
+                    if (nz_count == 0) first_nz = i;
+                    nz_count++;
+                }
+            }
+            fprintf(df, "\nPalette area $20000-$2FFFF: %d non-zero words", nz_count);
+            if (nz_count > 0) fprintf(df, " (first at $%05X)", first_nz);
+            fprintf(df, "\n");
+            /* Also check where palette data might actually be */
+            for (uint32_t base = 0; base < 0x30000; base += 0x4000) {
+                int nz = 0;
+                for (uint32_t i = base; i < base + 0x4000 && i < 0x30000; i += 2) {
+                    if (video_gfxram_read(i) != 0) nz++;
+                }
+                fprintf(df, "  GFX RAM $%05X-$%05X: %d non-zero words\n", base, base + 0x3FFF, nz);
+            }
+            fprintf(df, "\n");
+            fclose(df);
+            printf("[frame %d] Saved sf2_frame.bmp + sf2_diag.txt\n", s_frame_count);
         }
     }
     if (s_frame_count < 3 || s_frame_count % 600 == 0) {
