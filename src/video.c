@@ -199,10 +199,21 @@ static void draw_8x8_tile(
      * Actually: with 4-way interleave, each tile row = 8 bytes
      * (2 from each ROM).  8 rows × 8 bytes = 64 bytes per 8x8 tile.
      */
-    uint32_t tile_offset = (uint32_t)tile_num * 64;
-    if (tile_offset + 64 > s_gfx_size) return;
+    /* CPS1 GFX layout: each 64-byte block contains TWO interleaved 8x8 tiles.
+     * Bytes 0-3 of each 8-byte row = left subtile (4 bitplanes)
+     * Bytes 4-7 of each 8-byte row = right subtile (4 bitplanes)
+     *
+     * For 8x8 tile addressing: even tiles use left half, odd tiles use right.
+     * tile_num / 2 = which 64-byte block
+     * tile_num % 2 = left (0) or right (1) half
+     */
+    uint32_t block = (uint32_t)(tile_num / 2);
+    uint32_t block_offset = block * 64;
+    int half_offset = (tile_num & 1) ? 4 : 0;
 
-    const uint8_t *tile_data = s_gfx_data + tile_offset;
+    if (block_offset + 64 > s_gfx_size) return;
+
+    const uint8_t *tile_data = s_gfx_data + block_offset;
     int pal_base = palette_idx * CPS1_COLORS_PER_PAL;
 
     for (int row = 0; row < 8; row++) {
@@ -210,16 +221,12 @@ static void draw_8x8_tile(
         int py = y + row;
         if (py < 0 || py >= CPS1_SCREEN_HEIGHT) continue;
 
-        /* Each row: 8 bytes (2 from each of 4 ROM positions) */
-        const uint8_t *rp = tile_data + src_row * 8;
-        uint8_t b0 = rp[0];  /* ROM0 even byte */
-        uint8_t b1 = rp[1];  /* ROM0 odd byte */
-        uint8_t b2 = rp[2];  /* ROM1 even byte */
-        uint8_t b3 = rp[3];  /* ROM1 odd byte */
-        uint8_t b4 = rp[4];  /* ROM2 even byte */
-        uint8_t b5 = rp[5];  /* ROM2 odd byte */
-        uint8_t b6 = rp[6];  /* ROM3 even byte */
-        uint8_t b7 = rp[7];  /* ROM3 odd byte */
+        /* 4 consecutive bytes = 4 bitplanes for 8 pixels */
+        const uint8_t *rp = tile_data + src_row * 8 + half_offset;
+        uint8_t b0 = rp[0];
+        uint8_t b1 = rp[1];
+        uint8_t b2 = rp[2];
+        uint8_t b3 = rp[3];
 
         for (int col = 0; col < 8; col++) {
             int src_col = flip_x ? (7 - col) : col;
@@ -228,18 +235,11 @@ static void draw_8x8_tile(
 
             int bit = 7 - src_col;
 
-            /* CPS1 4bpp: extract one bit from each of 4 bitplane bytes.
-             * The nibble shuffle rearranges which bytes hold which planes.
-             * After gfx_decode, the mapping is:
-             *   plane 0: byte 0 (b0)
-             *   plane 2: byte 2 (b2)
-             *   plane 1: byte 4 (b4)
-             *   plane 3: byte 6 (b6)
-             * (odd bytes b1,b3,b5,b7 provide the second column set) */
+            /* CPS1 4bpp: 4 consecutive bytes are 4 bitplanes */
             uint8_t pixel = ((b0 >> bit) & 1) << 0 |
-                            ((b2 >> bit) & 1) << 1 |
-                            ((b4 >> bit) & 1) << 2 |
-                            ((b6 >> bit) & 1) << 3;
+                            ((b1 >> bit) & 1) << 1 |
+                            ((b2 >> bit) & 1) << 2 |
+                            ((b3 >> bit) & 1) << 3;
 
             if (pixel == 0) continue;  /* Transparent */
 
@@ -251,10 +251,15 @@ static void draw_8x8_tile(
 }
 
 /*
- * Draw a 16x16 tile (composed of four 8x8 tiles).
- * CPS1 16x16 tiles are made of 4 consecutive 8x8 tiles:
- *   tile+0: top-left      tile+1: top-right
- *   tile+2: bottom-left   tile+3: bottom-right
+ * Draw a 16x16 tile (composed of four 8x8 subtiles).
+ *
+ * CPS1 GFX layout: each 64-byte block contains TWO 8x8 tiles (left+right).
+ * A 16x16 tile occupies 2 consecutive 64-byte blocks (128 bytes):
+ *   Block 0 left  = top-left       Block 0 right = top-right
+ *   Block 1 left  = bottom-left    Block 1 right = bottom-right
+ *
+ * 8x8 tile numbering: tile N maps to block N/2, half N%2.
+ * So for 16x16 tile T: TL=T*4, TR=T*4+1, BL=T*4+2, BR=T*4+3.
  */
 static void draw_16x16_tile(
     uint32_t *fb,
@@ -264,28 +269,32 @@ static void draw_16x16_tile(
     int x, int y,
     const uint32_t *argb)
 {
-    uint32_t base = tile_num * 4;
+    /* 16x16 tile T → 8x8 subtiles: TL=T*4, TR=T*4+1, BL=T*4+2, BR=T*4+3 */
+    uint32_t tl = tile_num * 4;
+    uint32_t tr = tile_num * 4 + 1;
+    uint32_t bl = tile_num * 4 + 2;
+    uint32_t br = tile_num * 4 + 3;
 
     if (!flip_x && !flip_y) {
-        draw_8x8_tile(fb, base + 0, palette_idx, false, false, x,     y,     argb);
-        draw_8x8_tile(fb, base + 1, palette_idx, false, false, x + 8, y,     argb);
-        draw_8x8_tile(fb, base + 2, palette_idx, false, false, x,     y + 8, argb);
-        draw_8x8_tile(fb, base + 3, palette_idx, false, false, x + 8, y + 8, argb);
+        draw_8x8_tile(fb, tl, palette_idx, false, false, x,     y,     argb);
+        draw_8x8_tile(fb, tr, palette_idx, false, false, x + 8, y,     argb);
+        draw_8x8_tile(fb, bl, palette_idx, false, false, x,     y + 8, argb);
+        draw_8x8_tile(fb, br, palette_idx, false, false, x + 8, y + 8, argb);
     } else if (flip_x && !flip_y) {
-        draw_8x8_tile(fb, base + 1, palette_idx, true, false, x,     y,     argb);
-        draw_8x8_tile(fb, base + 0, palette_idx, true, false, x + 8, y,     argb);
-        draw_8x8_tile(fb, base + 3, palette_idx, true, false, x,     y + 8, argb);
-        draw_8x8_tile(fb, base + 2, palette_idx, true, false, x + 8, y + 8, argb);
+        draw_8x8_tile(fb, tr, palette_idx, true, false, x,     y,     argb);
+        draw_8x8_tile(fb, tl, palette_idx, true, false, x + 8, y,     argb);
+        draw_8x8_tile(fb, br, palette_idx, true, false, x,     y + 8, argb);
+        draw_8x8_tile(fb, bl, palette_idx, true, false, x + 8, y + 8, argb);
     } else if (!flip_x && flip_y) {
-        draw_8x8_tile(fb, base + 2, palette_idx, false, true, x,     y,     argb);
-        draw_8x8_tile(fb, base + 3, palette_idx, false, true, x + 8, y,     argb);
-        draw_8x8_tile(fb, base + 0, palette_idx, false, true, x,     y + 8, argb);
-        draw_8x8_tile(fb, base + 1, palette_idx, false, true, x + 8, y + 8, argb);
+        draw_8x8_tile(fb, bl, palette_idx, false, true, x,     y,     argb);
+        draw_8x8_tile(fb, br, palette_idx, false, true, x + 8, y,     argb);
+        draw_8x8_tile(fb, tl, palette_idx, false, true, x,     y + 8, argb);
+        draw_8x8_tile(fb, tr, palette_idx, false, true, x + 8, y + 8, argb);
     } else { /* flip_x && flip_y */
-        draw_8x8_tile(fb, base + 3, palette_idx, true, true, x,     y,     argb);
-        draw_8x8_tile(fb, base + 2, palette_idx, true, true, x + 8, y,     argb);
-        draw_8x8_tile(fb, base + 1, palette_idx, true, true, x,     y + 8, argb);
-        draw_8x8_tile(fb, base + 0, palette_idx, true, true, x + 8, y + 8, argb);
+        draw_8x8_tile(fb, br, palette_idx, true, true, x,     y,     argb);
+        draw_8x8_tile(fb, bl, palette_idx, true, true, x + 8, y,     argb);
+        draw_8x8_tile(fb, tr, palette_idx, true, true, x,     y + 8, argb);
+        draw_8x8_tile(fb, tl, palette_idx, true, true, x + 8, y + 8, argb);
     }
 }
 

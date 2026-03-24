@@ -31,8 +31,10 @@ const cps1_romset_t SF2_ROMSET = {
         { "sf2u.35a",    0x40001, 0x20000 },  /* Odd bytes  $40000-$7FFFF */
         { "sf2_36a.bin", 0x80000, 0x20000 },  /* Even bytes $80000-$BFFFF */
         { "sf2u.38a",    0x80001, 0x20000 },  /* Odd bytes  $80000-$BFFFF */
+        { "sf2_28a.bin", 0xC0000, 0x20000 },  /* Even bytes $C0000-$FFFFF */
+        { "sf2_29a.bin", 0xC0001, 0x20000 },  /* Odd bytes  $C0000-$FFFFF */
     },
-    .num_prog_roms = 6,
+    .num_prog_roms = 8,
     .gfx_roms = {
         { "sf2_06.bin", 0x80000 }, { "sf2_08.bin", 0x80000 },
         { "sf2_05.bin", 0x80000 }, { "sf2_07.bin", 0x80000 },
@@ -49,7 +51,7 @@ const cps1_romset_t SF2_ROMSET = {
         { "sf2_19.bin", 0x20000 },
     },
     .num_oki_roms = 2,
-    .total_prog_size = 0xC0000,      /* 768 KB (3 byte-interleaved pairs) */
+    .total_prog_size = 0x100000,     /* 1 MB (4 byte-interleaved pairs) */
     .total_gfx_size  = 0x600000,     /* 6 MB */
     .total_oki_size  = 0x40000,      /* 256 KB */
 };

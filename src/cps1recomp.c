@@ -37,6 +37,32 @@ static void cps1_vblank_hook(void) {
     /* Set the VBlank flag so the game's main loop proceeds */
     bus_wram_write8(0x020E, 0xFF);
 
+    /* Capture frame 300 as BMP for visual debugging */
+    if (s_frame_count == 300) {
+        FILE *bmp = fopen("sf2_frame.bmp", "wb");
+        if (bmp) {
+            int w = CPS1_SCREEN_WIDTH, h = CPS1_SCREEN_HEIGHT;
+            int img_size = w * h * 4;
+            int file_size = 54 + img_size;
+            uint8_t hdr[54] = {0};
+            hdr[0]='B'; hdr[1]='M';
+            hdr[2]=file_size; hdr[3]=file_size>>8; hdr[4]=file_size>>16; hdr[5]=file_size>>24;
+            hdr[10]=54; hdr[14]=40;
+            hdr[18]=w; hdr[19]=w>>8; hdr[22]=h; hdr[23]=h>>8;
+            hdr[26]=1; hdr[28]=32;
+            hdr[34]=img_size; hdr[35]=img_size>>8; hdr[36]=img_size>>16; hdr[37]=img_size>>24;
+            fwrite(hdr, 1, 54, bmp);
+            for (int y = h - 1; y >= 0; y--) {
+                for (int x = 0; x < w; x++) {
+                    uint32_t px = s_framebuffer[y * w + x];
+                    uint8_t bgra[4] = { (uint8_t)(px), (uint8_t)(px>>8), (uint8_t)(px>>16), (uint8_t)(px>>24) };
+                    fwrite(bgra, 1, 4, bmp);
+                }
+            }
+            fclose(bmp);
+            printf("[frame %d] Saved sf2_frame.bmp\n", s_frame_count);
+        }
+    }
     if (s_frame_count < 3 || s_frame_count % 600 == 0) {
         printf("[frame %d]\n", s_frame_count); fflush(stdout);
     }
