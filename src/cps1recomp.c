@@ -70,7 +70,12 @@ static void cps1_vblank_hook(void) {
             uint16_t attract_state = ((uint16_t)wram[0x8000] << 8) | wram[0x8001];
             uint8_t f5d59 = wram[0x8000 + 0x5d59];
             uint8_t f5d56 = wram[0x8000 + 0x5d56];
-            fprintf(df, "Game: attract_state=%u 5D59=%u 5D56=%u\n", attract_state, f5d59, f5d56);
+            uint8_t f2d7 = wram[0x8000 + 0x2d7];
+            uint8_t f2e1 = wram[0x8000 + 0x2e1];
+            uint8_t f8c = wram[0x8000 + 0x8c];
+            uint8_t f2e0 = wram[0x8000 + 0x2e0];
+            fprintf(df, "Game: attract_state=%u 5D59=%u 5D56=%u 2D7=%u 2E0=%u 2E1=%u 8C=$%02X\n",
+                    attract_state, f5d59, f5d56, f2d7, f2e0, f2e1, f8c);
             /* Active task slots */
             int active = 0;
             for (int i = 0; i < 16; i++) {
