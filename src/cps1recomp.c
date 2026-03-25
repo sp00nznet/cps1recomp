@@ -110,12 +110,20 @@ static void cps1_vblank_hook(void) {
                 fprintf(df, "  [%d] tile=$%04X attr=$%04X\n", i, w0, w1);
             }
             uint32_t s2_off = ((uint32_t)s2_base << 8) % 0x30000;
-            fprintf(df, "\nScroll2 tilemap (first 8 entries at $%05X):\n", s2_off);
-            for (int i = 0; i < 8; i++) {
+            fprintf(df, "\nScroll2 tilemap (non-$4020 entries at $%05X):\n", s2_off);
+            int s2_nonstd = 0;
+            for (int i = 0; i < 4096; i++) {
                 uint16_t w0 = video_gfxram_read(s2_off + i*4);
-                uint16_t w1 = video_gfxram_read(s2_off + i*4 + 2);
-                fprintf(df, "  [%d] tile=$%04X attr=$%04X\n", i, w0, w1);
+                if (w0 != 0x4020 && w0 != 0x0000) {
+                    if (s2_nonstd < 16) {
+                        uint16_t w1 = video_gfxram_read(s2_off + i*4 + 2);
+                        fprintf(df, "  [%d] tile=$%04X attr=$%04X (off=$%04X)\n",
+                                i, w0, w1, i*4);
+                    }
+                    s2_nonstd++;
+                }
             }
+            fprintf(df, "  Total non-standard entries: %d\n", s2_nonstd);
             /* Palette data from CPS_A_OTHER_BASE register ($800108) */
             uint16_t pal_reg = video_read_cps_a(0x108);
             uint32_t p_off = ((uint32_t)pal_reg << 8) % 0x30000;
