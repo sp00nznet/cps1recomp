@@ -38,7 +38,7 @@ static void cps1_vblank_hook(void) {
     bus_wram_write8(0x020E, 0xFF);
 
     /* Capture frames as BMP + diagnostic dump */
-    if (s_frame_count == 120 || s_frame_count == 300 || s_frame_count == 600) {
+    if (s_frame_count == 600 || s_frame_count == 1200) {
         FILE *bmp = fopen("sf2_frame.bmp", "wb");
         if (bmp) {
             int w = CPS1_SCREEN_WIDTH, h = CPS1_SCREEN_HEIGHT;
