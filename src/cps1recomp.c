@@ -131,6 +131,16 @@ static void cps1_vblank_hook(void) {
                 uint16_t val = video_read_cps_a(0x100 + i*2);
                 fprintf(df, "  $8001%02X = $%04X\n", i*2, val);
             }
+            /* Control regs + WRAM shadow registers (A5-relative $2A-$5C) */
+            fprintf(df, "Ctrl: $800122(layerEn,CPSA)=$%04X CPSB$140=$%04X $14A=$%04X $154=$%04X\n",
+                    video_read_cps_a(0x122), video_read_cps_b(0x000),
+                    video_read_cps_b(0x00A), video_read_cps_b(0x014));
+            fprintf(df, "WRAM shadows (A5+off): ");
+            for (uint32_t off = 0x2A; off <= 0x5C; off += 2) {
+                uint16_t v = ((uint16_t)wram[0x8000+off] << 8) | wram[0x8000+off+1];
+                fprintf(df, "$%02X=%04X ", off, v);
+            }
+            fprintf(df, "\n");
             /* Scroll base addresses */
             uint16_t s1_base = video_read_cps_a(0x100);
             uint16_t s2_base = video_read_cps_a(0x102);
@@ -333,98 +343,53 @@ void cps1_run(void) {
      *
      * Values extracted from disassembly of $00040E-$0004A6:
      */
-    printf("[cps1] Applying SF2 hardware init...\n"); fflush(stdout);
-    {
-        /* CPS-A register writes from the init code */
-        bus_write8(0x800030, 0x80);    /* Reset pulse */
-        bus_write8(0x800030, 0x00);    /* Release reset */
-        bus_write8(0x800181, 0xF0);    /* Sound latch init */
-
-        /* GFX RAM layout */
-        bus_write16(0x80010C, 0xFFC0); /* Scroll 1 X offset */
-        bus_write16(0x80010E, 0x0000); /* Scroll 1 Y offset */
-        bus_write16(0x800100, 0x9100); /* Scroll 1 base */
-        bus_write16(0x800102, 0x90C0); /* Scroll 2 base */
-        bus_write16(0x800104, 0x9040); /* Scroll 3 base */
-        bus_write16(0x800106, 0x9080); /* Sprite base */
-        bus_write16(0x800108, 0x9200); /* Other/palette base */
-        bus_write16(0x80010A, 0x9000); /* Palette control */
-
-        /* CPS-B registers from init */
-        bus_write16(0x800154, 0x12C8); /* CPS-B ID / config */
-        bus_write16(0x800122, 0x003E); /* Layer enable */
-        bus_write16(0x80014A, 0x003F); /* Priority mask */
-
-        /* Set up scroll offsets for layers 2 and 3 */
-        bus_write16(0x800110, 0x0000); /* Scroll 2 X */
-        bus_write16(0x800112, 0x0000); /* Scroll 2 Y */
-        bus_write16(0x800114, 0x0000); /* Scroll 3 X */
-        bus_write16(0x800116, 0x0000); /* Scroll 3 Y */
-
-        /* Initialize Work RAM stack area */
-        g_m68k.a[7] = 0x00FFFFFC;
-
-        printf("[cps1] CPS-A/B registers configured\n"); fflush(stdout);
-    }
-
-    /* Run the full init chain from entry point.
-     * The LEA+BRA fix lets the init subroutines work correctly.
-     * After init, we call sub_000910 which is the main loop setup
-     * that initializes task slots and enters the game loop. */
-    /* Run init chain — call entry point and fall-through functions */
-    printf("[cps1] Running init...\n"); fflush(stdout);
-
-    /* Set up A5 and A7 as the init code would */
-    g_m68k.a[5] = 0xFF8000;
-    g_m68k.a[7] = 0xFF0000;
-
-    /* Run entry_point and fall-through init functions */
-    uint32_t init_addrs[] = {
-        0x00040E, 0x00041C, 0x000426, 0x000448, 0x000476,
-        0x000500, 0x000512,
-    };
-    for (int i = 0; i < (int)(sizeof(init_addrs)/sizeof(init_addrs[0])); i++) {
-        cps1_func_t fn = func_table_lookup(init_addrs[i]);
-        if (fn) fn();
-    }
-    printf("[cps1] Init functions done\n"); fflush(stdout);
-
     /*
-     * Install VBlank hook: when the game's main loop reads the VBlank
-     * flag (at Work RAM offset $020E), we render a frame, present it,
-     * poll input, and set the flag so the game continues.
-     *
-     * This turns the game's infinite VBlank-wait loop into our frame loop.
+     * Install the VBlank hook BEFORE running init. With the recompiler's
+     * LEA+BRA continuation, interior-jump-table, and fall-through fixes, the
+     * real entry point at $00040E now executes the entire init chain and flows
+     * straight into the game's main loop ($000910) — which spins waiting on the
+     * VBlank flag. The hook turns that wait into our frame loop, so it must be
+     * live before the chain reaches the main loop.
      */
     bus_set_vblank_hook(cps1_vblank_hook);
-
     printf("[cps1] VBlank hook installed\n"); fflush(stdout);
 
-    /* Call $0006A6's remaining init (scroll register setup) without
-     * the JMP $910 at the end — we handle that ourselves */
+    /* Initial CPU state the reset/init code expects (the ROM's reset SSP is 0;
+     * the real init sets A5 = system-work base and the stack pointer). */
+    g_m68k.a[5] = 0x00FF8000;
+    g_m68k.a[7] = 0x00FFFFFC;
+    g_m68k.ssp  = 0x00FFFFFC;
+
+    printf("[cps1] Running REAL init chain from $00040E...\n"); fflush(stdout);
+    if (func_table_lookup(0x00040E)) {
+        func_table_call(0x00040E);   /* real init: runs the setup chain, returns */
+    }
+    printf("[cps1] Real init returned; entering main loop ($000910)...\n"); fflush(stdout);
+
+    /* Bridge: the real init configures the scroll2/3/sprite CPS-A bases but does
+     * not yet set the WRAM scroll-shadow registers (A5+$2A..$5C) that the game's
+     * per-frame handler copies into the scroll1/palette CPS regs — so without
+     * this they get written as $0000 each frame and the screen is garbage. Until
+     * the real shadow-setup path is identified, seed them as the init would. */
     {
-        /* $0006A6 sets up scroll shadow registers in Work RAM.
-         * We replicate the essential writes. */
         uint8_t *wram = bus_get_wram_ptr();
-        /* A5-relative offsets (A5=$FF8000, so wram offset = A5_offset + $8000) */
         #define WR16(off, val) do { wram[0x8000+(off)] = (uint8_t)((val)>>8); wram[0x8000+(off)+1] = (uint8_t)(val); } while(0)
-        WR16(0x2A, 0x9100);  /* scroll1 base shadow */
-        WR16(0x2C, 0x90C0);  /* scroll2 base shadow */
-        WR16(0x2E, 0x9040);  /* scroll3 base shadow */
-        WR16(0x30, 0x9080);  /* sprite base shadow */
-        WR16(0x32, 0x9200);  /* palette base shadow */
-        WR16(0x34, 0x9000);  /* other base shadow */
+        WR16(0x2A, 0x9100);  /* scroll1 base shadow  */
+        WR16(0x2C, 0x90C0);  /* scroll2 base shadow  */
+        WR16(0x2E, 0x9040);  /* scroll3 base shadow  */
+        WR16(0x30, 0x9080);  /* sprite base shadow   */
+        WR16(0x32, 0x9200);  /* palette base shadow  */
+        WR16(0x34, 0x9000);  /* other base shadow    */
         WR16(0x4C, 0x003F);
         WR16(0x52, 0x12DA);
         WR16(0x5C, 0x003F);
         #undef WR16
     }
+    bus_write16(0x800154, 0x12C8); /* CPS-B config */
+    bus_write16(0x80014A, 0x003F); /* CPS-B priority mask */
+    bus_write16(0x800122, 0x003E); /* layer enable */
 
-    printf("[cps1] Calling main loop ($000910)...\n"); fflush(stdout);
-
-    /* This call enters the game's infinite main loop.
-     * The VBlank hook fires each time the game reads the VBlank flag,
-     * rendering and presenting a frame. This call never returns. */
+    /* Enter the game's main loop. The VBlank hook drives it frame-by-frame. */
     if (func_table_lookup(0x000910)) {
         func_table_call(0x000910);
     }
