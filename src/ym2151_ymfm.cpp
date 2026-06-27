@@ -22,13 +22,19 @@ public:
     cps1_ymfm_interface() = default;
     ~cps1_ymfm_interface() override = default;
 
-    /* Timer callbacks — CPS1 doesn't need precise timers for basic playback */
+    /* Timer callbacks. The CPS1 sound driver is interrupt-driven off the
+     * YM2151 timer, so these must be functional for music to play. ymfm asks
+     * us to schedule engine_timer_expired() after duration_in_clocks (input
+     * clocks); a negative duration cancels. We count the timers down in
+     * ym2151_tick(), called from the Z80 driver at the chip clock rate. */
     void ymfm_set_timer(uint32_t tnum, int32_t duration_in_clocks) override {
-        /* For now, ignore timers. The Z80 sound driver polls the status
-         * register for timer flags, but many CPS1 games work without
-         * accurate timer emulation during initial bring-up. */
-        (void)tnum;
-        (void)duration_in_clocks;
+        if (tnum > 1) return;
+        if (duration_in_clocks < 0) {
+            m_timer_active[tnum] = false;
+        } else {
+            m_timer_count[tnum] = duration_in_clocks;
+            m_timer_active[tnum] = true;
+        }
     }
 
     void ymfm_set_busy_end(uint32_t clocks) override {
@@ -54,10 +60,31 @@ public:
             m_busy_counter = 0;
     }
 
+    /* Advance both timers by `clocks` input clocks, firing expired ones. */
+    void tick_timers(uint32_t clocks) {
+        if (clocks == 0) return;
+        tick_busy(clocks);
+        for (uint32_t t = 0; t < 2; t++) {
+            if (!m_timer_active[t]) continue;
+            m_timer_count[t] -= (int64_t)clocks;
+            int guard = 0;
+            while (m_timer_active[t] && m_timer_count[t] <= 0 && guard++ < 64) {
+                int64_t overshoot = m_timer_count[t];      /* <= 0 */
+                /* Firing may reschedule via ymfm_set_timer (auto-reload) or
+                 * cancel; it also updates the IRQ line via ymfm_update_irq. */
+                m_engine->engine_timer_expired(t);
+                if (!m_timer_active[t]) break;             /* one-shot / cancelled */
+                m_timer_count[t] += overshoot;             /* carry the remainder */
+            }
+        }
+    }
+
 private:
     bool m_irq = false;
     uint32_t m_busy_clocks = 0;
     uint32_t m_busy_counter = 0;
+    bool m_timer_active[2] = { false, false };
+    int64_t m_timer_count[2] = { 0, 0 };
 };
 
 /* ---- Global state ---- */
@@ -117,6 +144,14 @@ void ym2151_write(uint8_t addr, uint8_t data) {
 uint8_t ym2151_read(void) {
     if (!s_chip) return 0;
     return s_chip->read_status();
+}
+
+void ym2151_tick(uint32_t clocks) {
+    if (s_intf) s_intf->tick_timers(clocks);
+}
+
+bool ym2151_irq_asserted(void) {
+    return s_intf ? s_intf->get_irq() : false;
 }
 
 void ym2151_generate(int16_t *buffer, int num_samples) {

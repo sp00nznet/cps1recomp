@@ -15,6 +15,7 @@
 #define CPS1RECOMP_YM2151_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,6 +30,15 @@ uint8_t ym2151_read(void);
 
 /* Generate audio samples. Fills buffer with interleaved stereo int16. */
 void ym2151_generate(int16_t *buffer, int num_samples);
+
+/* Advance the YM2151's internal timers by the given number of chip clocks
+ * (1:1 with Z80 cycles, since both run at 3.579545 MHz). Firing a timer may
+ * assert the IRQ line. Called from the Z80 execution driver. */
+void ym2151_tick(uint32_t clocks);
+
+/* True while the YM2151 is asserting its IRQ output (timer overflow with the
+ * matching IRQ-enable bit set). The CPS1 wires this to the Z80 INT line. */
+bool ym2151_irq_asserted(void);
 
 #ifdef __cplusplus
 }

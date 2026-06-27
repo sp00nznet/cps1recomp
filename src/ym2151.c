@@ -43,3 +43,11 @@ void ym2151_generate(int16_t *buffer, int num_samples) {
     /* Silence until ymfm is integrated */
     memset(buffer, 0, num_samples * 2 * sizeof(int16_t));
 }
+
+void ym2151_tick(uint32_t clocks) {
+    (void)clocks;  /* no timers in the stub */
+}
+
+bool ym2151_irq_asserted(void) {
+    return false;  /* stub never raises IRQ */
+}

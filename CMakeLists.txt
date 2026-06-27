@@ -31,10 +31,11 @@ if(Z80_DIR STREQUAL "")
     set(Z80_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ext/z80)  # fallback
 endif()
 
-# Z80 core: disabled for now (GenPlusGX Z80 has too many dependencies)
-# TODO: integrate a standalone Z80 interpreter (z80ex, or extract/port the core)
+# Z80 sound CPU: built in from the ported z80recomp interpreter
+# (src/z80/z80_cpu.c, z80_decode.c, z80_interp.c — driven by src/z80.c).
+# The external GenPlusGX/z80ex path below is no longer used.
 set(HAVE_Z80_CORE FALSE)
-message(STATUS "Z80 core: using stub (no sound driver execution)")
+message(STATUS "Z80 core: interpreter (ported from z80recomp)")
 
 # --- ymfm library (for YM2151) ---
 set(YMFM_DIR_CANDIDATES
@@ -83,6 +84,9 @@ set(CPS1_SOURCES
     src/timer.c
     src/oki6295.c
     src/z80.c
+    src/z80/z80_cpu.c
+    src/z80/z80_decode.c
+    src/z80/z80_interp.c
     src/rom.c
     src/platform.c
     src/debug.c

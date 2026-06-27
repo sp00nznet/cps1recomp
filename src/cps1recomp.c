@@ -16,6 +16,47 @@ static int s_frame_count = 0;
  * We render the current frame, present it, poll input, and set the
  * VBlank flag so the game loop continues processing.
  */
+/* Run the sound hardware for one frame: step the Z80 sound CPU (which drives
+ * the YM2151/OKI and advances the YM timer that paces its own IRQ), then mix a
+ * frame of audio and queue it to the host. Called once per displayed frame. */
+static void cps1_run_sound_frame(void) {
+    /* Run Z80 for one frame (3.579545 MHz / 59.63 Hz). The YM2151 timer IRQ is
+     * advanced inside z80_execute via ym2151_tick. */
+    z80_execute(60192);
+
+    /* ~735 samples per frame at 44100 Hz / 59.63 Hz */
+    #define SAMPLES_PER_FRAME 735
+    int16_t ym_buf[SAMPLES_PER_FRAME * 2];     /* Stereo */
+    int16_t oki_buf[SAMPLES_PER_FRAME];        /* Mono   */
+    int16_t mix_buf[SAMPLES_PER_FRAME * 2];    /* Mixed stereo */
+
+    ym2151_generate(ym_buf, SAMPLES_PER_FRAME);
+    oki6295_generate(oki_buf, SAMPLES_PER_FRAME);
+
+    for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
+        int32_t l = (int32_t)ym_buf[i * 2 + 0] + (int32_t)oki_buf[i];
+        int32_t r = (int32_t)ym_buf[i * 2 + 1] + (int32_t)oki_buf[i];
+        if (l > 32767) l = 32767; if (l < -32768) l = -32768;
+        if (r > 32767) r = 32767; if (r < -32768) r = -32768;
+        mix_buf[i * 2 + 0] = (int16_t)l;
+        mix_buf[i * 2 + 1] = (int16_t)r;
+    }
+    /* num_samples is the stereo-frame count (queue multiplies by 2ch * 2 bytes). */
+    platform_audio_queue(mix_buf, SAMPLES_PER_FRAME);
+
+    /* Objective bring-up check: report the audio peak so silence is detectable. */
+    static int s_snd_frame = 0;
+    if (++s_snd_frame % 600 == 0) {
+        int peak = 0;
+        for (int i = 0; i < SAMPLES_PER_FRAME * 2; i++) {
+            int a = mix_buf[i] < 0 ? -mix_buf[i] : mix_buf[i];
+            if (a > peak) peak = a;
+        }
+        printf("[snd] frame %d: audio peak=%d\n", s_snd_frame, peak);
+        fflush(stdout);
+    }
+}
+
 static void cps1_vblank_hook(void) {
     if (s_frame_count == 0) {
         printf("[hook] VBlank hook fired! A5=$%08X\n", g_m68k.a[5]);
@@ -33,6 +74,9 @@ static void cps1_vblank_hook(void) {
 
     /* Frame sync */
     platform_frame_sync();
+
+    /* Run the sound CPU + mix one frame of audio */
+    cps1_run_sound_frame();
 
     /* Set the VBlank flag so the game's main loop proceeds */
     bus_wram_write8(0x020E, 0xFF);
@@ -428,28 +472,8 @@ void cps1_trigger_vblank(void) {
     /* Render the current frame */
     video_render_frame(s_framebuffer);
 
-    /* Generate audio: ~735 samples per frame at 44100 Hz / 59.63 Hz */
-    #define SAMPLES_PER_FRAME 735
-    int16_t ym_buf[SAMPLES_PER_FRAME * 2];    /* Stereo */
-    int16_t oki_buf[SAMPLES_PER_FRAME];        /* Mono */
-    int16_t mix_buf[SAMPLES_PER_FRAME * 2];    /* Mixed stereo output */
-
-    ym2151_generate(ym_buf, SAMPLES_PER_FRAME);
-    oki6295_generate(oki_buf, SAMPLES_PER_FRAME);
-
-    /* Mix: YM2151 stereo + OKI mono (center-panned) */
-    for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
-        int32_t l = (int32_t)ym_buf[i * 2 + 0] + (int32_t)oki_buf[i];
-        int32_t r = (int32_t)ym_buf[i * 2 + 1] + (int32_t)oki_buf[i];
-        if (l > 32767) l = 32767; if (l < -32768) l = -32768;
-        if (r > 32767) r = 32767; if (r < -32768) r = -32768;
-        mix_buf[i * 2 + 0] = (int16_t)l;
-        mix_buf[i * 2 + 1] = (int16_t)r;
-    }
-    platform_audio_queue(mix_buf, SAMPLES_PER_FRAME * 2);
-
-    /* Run Z80 for one frame */
-    z80_execute(60192);  /* 3.579545 MHz / 59.63 Hz */
+    /* Sound CPU + audio for this frame */
+    cps1_run_sound_frame();
 }
 
 void cps1_end_frame(void) {
