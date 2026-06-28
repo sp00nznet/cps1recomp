@@ -318,6 +318,27 @@ static inline uint32_t gfxram_base_from_reg(uint16_t reg_val) {
     return ((uint32_t)reg_val << 8) % CPS1_GFXRAM_SIZE;
 }
 
+/*
+ * CPS1 tilemap address scan: logical (col,row) -> tile-entry index.
+ * The hardware does NOT lay the tilemap out as plain column-major; each layer
+ * uses a swizzled scan (MAME tilemap{0,1,2}_scan). Reading it as col*64+row
+ * scrambles the picture into a regular-but-wrong grid. The low row bits select
+ * the entry within a 64-byte-aligned strip and the high row bits jump strips.
+ *   scroll1 (8x8) : (row&0x1f) | (col&0x3f)<<5 | (row&0x20)<<6
+ *   scroll2 (16x16): (row&0x0f) | (col&0x3f)<<4 | (row&0x30)<<6
+ *   scroll3 (16x16): (row&0x07) | (col&0x3f)<<3 | (row&0x38)<<6
+ * Returned index is in tile entries; each entry is 4 bytes (2 words).
+ */
+static inline uint32_t cps1_scan_scroll1(int col, int row) {
+    return (uint32_t)((row & 0x1f) | ((col & 0x3f) << 5) | ((row & 0x20) << 6));
+}
+static inline uint32_t cps1_scan_scroll2(int col, int row) {
+    return (uint32_t)((row & 0x0f) | ((col & 0x3f) << 4) | ((row & 0x30) << 6));
+}
+static inline uint32_t cps1_scan_scroll3(int col, int row) {
+    return (uint32_t)((row & 0x07) | ((col & 0x3f) << 3) | ((row & 0x38) << 6));
+}
+
 static void render_scroll1(uint32_t *fb, const uint32_t *argb) {
     uint16_t base_reg = s_cps_a[CPS_A_SCROLL1_BASE / 2];
     uint32_t tilemap_base = gfxram_base_from_reg(base_reg);
@@ -338,8 +359,8 @@ static void render_scroll1(uint32_t *fb, const uint32_t *argb) {
             int map_col = (start_col + col) & 63;  /* Wrap at 64 */
             int map_row = (start_row + row) & 63;
 
-            /* 4 bytes per entry (2 words), column-major */
-            uint32_t map_offset = tilemap_base + ((uint32_t)(map_col * 64 + map_row) * 4);
+            /* 4 bytes per entry (2 words), CPS1 swizzled scan */
+            uint32_t map_offset = tilemap_base + cps1_scan_scroll1(map_col, map_row) * 4;
             uint16_t word0 = gfxram_read16(map_offset);
             uint16_t word1 = gfxram_read16(map_offset + 2);
 
@@ -379,7 +400,7 @@ static void render_scroll2(uint32_t *fb, const uint32_t *argb) {
             int map_col = (start_col + col) & 63;
             int map_row = (start_row + row) & 63;
 
-            uint32_t map_offset = tilemap_base + ((uint32_t)(map_col * 64 + map_row) * 4);
+            uint32_t map_offset = tilemap_base + cps1_scan_scroll2(map_col, map_row) * 4;
             uint16_t word0 = gfxram_read16(map_offset);
             uint16_t word1 = gfxram_read16(map_offset + 2);
 
@@ -422,7 +443,7 @@ static void render_scroll3(uint32_t *fb, const uint32_t *argb) {
             int map_col = (start_col + col) & 63;
             int map_row = (start_row + row) & 63;
 
-            uint32_t map_offset = tilemap_base + ((uint32_t)(map_col * 64 + map_row) * 4);
+            uint32_t map_offset = tilemap_base + cps1_scan_scroll3(map_col, map_row) * 4;
             uint16_t word0 = gfxram_read16(map_offset);
             uint16_t word1 = gfxram_read16(map_offset + 2);
 
