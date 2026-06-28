@@ -127,6 +127,24 @@ int rom_load(const char *path, const cps1_romset_t *romset) {
     s_gfx_data = load_file(gfx_path, &gfx_size);
     if (s_gfx_data) {
         printf("[rom] GFX tiles: %u KB\n", gfx_size / 1024);
+        /* MAME cps1_gfx_decode bit-shuffle: rearrange each 4-byte group into
+         * packed 4bpp (one 8-pixel row). extract_roms.py does the interleave but
+         * not this step, so without it tiles decode to scrambled noise. */
+        for (uint32_t n = 0; n < gfx_size / 4; n++) {
+            uint8_t *p = s_gfx_data + 4 * n;
+            uint32_t src = (uint32_t)p[0] | ((uint32_t)p[1] << 8)
+                         | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+            uint32_t dw = 0;
+            for (int i = 0; i < 8; i++) {
+                int j = 4 * i;
+                if (src & (1u << (i +  0))) dw |= 1u << (j + 3);
+                if (src & (1u << (i +  8))) dw |= 1u << (j + 2);
+                if (src & (1u << (i + 16))) dw |= 1u << (j + 1);
+                if (src & (1u << (i + 24))) dw |= 1u << (j + 0);
+            }
+            p[0] = (uint8_t)dw; p[1] = (uint8_t)(dw >> 8);
+            p[2] = (uint8_t)(dw >> 16); p[3] = (uint8_t)(dw >> 24);
+        }
         video_set_gfx_data(s_gfx_data, gfx_size);
     } else {
         fprintf(stderr, "[rom] WARNING: No GFX data (%s)\n", gfx_path);
