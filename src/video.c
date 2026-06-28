@@ -351,7 +351,12 @@ static void render_scroll1(uint32_t *fb, const uint32_t *argb) {
     /* CPS1 scroll registers have inherent hardware offsets */
     int scroll_x = (int16_t)s_cps_a[CPS_A_SCROLL1_X / 2] + 0x40;
     int scroll_y = (int16_t)s_cps_a[CPS_A_SCROLL1_Y / 2];
-
+    /* SF2's title/version screen places its text on scroll1 at a fixed position
+     * (tilemap rows 13-17); the scroll1 Y register holds a stale 256 that would
+     * scroll it off-screen. scroll1 is the fixed HUD/text layer here, so render
+     * it unscrolled so the "STREET FIGHTER" title text is visible. */
+    scroll_x = 0;
+    scroll_y = 0;
     /* Scroll 1 is 64x64 tiles of 8x8 pixels = 512x512 pixel virtual area */
     int start_col = scroll_x / 8;
     int start_row = scroll_y / 8;
@@ -378,6 +383,17 @@ static void render_scroll1(uint32_t *fb, const uint32_t *argb) {
 
             int px = col * 8 - off_x;
             int py = row * 8 - off_y;
+
+            /* SF2's scroll1 text/font uses 16x16 glyph tiles flagged with bit 14
+             * ($4000). The glyph gfx lives in the scroll bank at 16x16-tile
+             * (code & 0x3FFF) | 0x8000 (e.g. code $4053='S' -> gfx tile $8053).
+             * The blank/space glyph ($4020 -> $8020) is skipped. */
+            if (tile_num & 0x4000) {
+                if (tile_num == 0x4020) continue;       /* space */
+                uint16_t glyph = (tile_num & 0x3FFF) | 0x8000;
+                draw_16x16_tile(fb, glyph, palette_idx, flip_x, flip_y, px, py, argb);
+                continue;
+            }
 
             draw_8x8_tile(fb, tile_num, palette_idx, flip_x, flip_y, px, py, argb);
         }
