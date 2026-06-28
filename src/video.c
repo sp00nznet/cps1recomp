@@ -568,8 +568,13 @@ void video_render_frame(uint32_t *framebuffer) {
      * TODO: Read CPS-B priority registers for proper ordering.
      */
 
-    render_scroll3(framebuffer, argb);
-    render_scroll2(framebuffer, argb);
+    /* Respect the CPS1 layer-enable bits in the layer-control register (SF2 keeps
+     * it at CPS-B offset $14 = $800154). Each scroll layer only draws when its
+     * enable bit is set; on the title/version screen scroll2/3 are disabled so the
+     * text shows on a black backdrop instead of leftover fill tiles. */
+    uint16_t layer_ctrl = video_read_cps_b(0x14);
+    if (layer_ctrl & 0x08) render_scroll3(framebuffer, argb);
+    if (layer_ctrl & 0x04) render_scroll2(framebuffer, argb);
     render_sprites(framebuffer, argb);
-    render_scroll1(framebuffer, argb);
+    if (layer_ctrl & 0x02) render_scroll1(framebuffer, argb);
 }
