@@ -212,10 +212,11 @@ static void draw_8x8_tile(
      * tile_num / 2 = which 64-byte block
      * tile_num % 2 = left (0) or right (1) half
      */
-    /* Post-shuffle CPS1 charlayout: 8x8 char = 32 bytes; each row = 4 bytes
-     * holding 8 packed 4bpp pixels (pixel x = (row32 >> (4*x)) & 0xF). */
-    uint32_t block_offset = tile_num * 32;
-    if (block_offset + 32 > s_gfx_size) return;
+    uint32_t block = (uint32_t)(tile_num / 2);
+    uint32_t block_offset = block * 64;
+    int half_offset = (tile_num & 1) ? 4 : 0;
+
+    if (block_offset + 64 > s_gfx_size) return;
 
     const uint8_t *tile_data = s_gfx_data + block_offset;
     int pal_base = palette_idx * CPS1_COLORS_PER_PAL;
@@ -225,16 +226,26 @@ static void draw_8x8_tile(
         int py = y + row;
         if (py < 0 || py >= CPS1_SCREEN_HEIGHT) continue;
 
-        const uint8_t *rp = tile_data + src_row * 4;
-        uint32_t row32 = (uint32_t)rp[0] | ((uint32_t)rp[1] << 8)
-                       | ((uint32_t)rp[2] << 16) | ((uint32_t)rp[3] << 24);
+        /* 4 consecutive bytes = 4 bitplanes for 8 pixels */
+        const uint8_t *rp = tile_data + src_row * 8 + half_offset;
+        uint8_t b0 = rp[0];
+        uint8_t b1 = rp[1];
+        uint8_t b2 = rp[2];
+        uint8_t b3 = rp[3];
 
         for (int col = 0; col < 8; col++) {
             int src_col = flip_x ? (7 - col) : col;
             int px = x + col;
             if (px < 0 || px >= CPS1_SCREEN_WIDTH) continue;
 
-            uint8_t pixel = (row32 >> (4 * src_col)) & 0xF;
+            int bit = 7 - src_col;
+
+            /* CPS1 4bpp: 4 consecutive bytes are 4 bitplanes */
+            uint8_t pixel = ((b0 >> bit) & 1) << 0 |
+                            ((b1 >> bit) & 1) << 1 |
+                            ((b2 >> bit) & 1) << 2 |
+                            ((b3 >> bit) & 1) << 3;
+
             if (pixel == 0) continue;  /* Transparent */
 
             if (pal_base + pixel < CPS1_TOTAL_COLORS) {
@@ -263,29 +274,32 @@ static void draw_16x16_tile(
     int x, int y,
     const uint32_t *argb)
 {
-    /* Post-shuffle CPS1 tilelayout: 16x16 tile = 128 bytes; each row = 8 bytes
-     * holding 16 packed 4bpp pixels (pixel x = (row64 >> (4*x)) & 0xF). */
-    if (!s_gfx_data || s_gfx_size == 0) return;
-    uint32_t base = tile_num * 128;
-    if (base + 128 > s_gfx_size) return;
-    int pal_base = palette_idx * CPS1_COLORS_PER_PAL;
+    /* 16x16 tile T → 8x8 subtiles: TL=T*4, TR=T*4+1, BL=T*4+2, BR=T*4+3 */
+    uint32_t tl = tile_num * 4;
+    uint32_t tr = tile_num * 4 + 1;
+    uint32_t bl = tile_num * 4 + 2;
+    uint32_t br = tile_num * 4 + 3;
 
-    for (int row = 0; row < 16; row++) {
-        int src_row = flip_y ? (15 - row) : row;
-        int py = y + row;
-        if (py < 0 || py >= CPS1_SCREEN_HEIGHT) continue;
-        const uint8_t *rp = s_gfx_data + base + src_row * 8;
-        uint64_t row64 = 0;
-        for (int b = 0; b < 8; b++) row64 |= (uint64_t)rp[b] << (8 * b);
-        for (int col = 0; col < 16; col++) {
-            int src_col = flip_x ? (15 - col) : col;
-            int px = x + col;
-            if (px < 0 || px >= CPS1_SCREEN_WIDTH) continue;
-            uint8_t pixel = (row64 >> (4 * src_col)) & 0xF;
-            if (pixel == 0) continue;
-            if (pal_base + pixel < CPS1_TOTAL_COLORS)
-                fb[py * CPS1_SCREEN_WIDTH + px] = argb[pal_base + pixel];
-        }
+    if (!flip_x && !flip_y) {
+        draw_8x8_tile(fb, tl, palette_idx, false, false, x,     y,     argb);
+        draw_8x8_tile(fb, tr, palette_idx, false, false, x + 8, y,     argb);
+        draw_8x8_tile(fb, bl, palette_idx, false, false, x,     y + 8, argb);
+        draw_8x8_tile(fb, br, palette_idx, false, false, x + 8, y + 8, argb);
+    } else if (flip_x && !flip_y) {
+        draw_8x8_tile(fb, tr, palette_idx, true, false, x,     y,     argb);
+        draw_8x8_tile(fb, tl, palette_idx, true, false, x + 8, y,     argb);
+        draw_8x8_tile(fb, br, palette_idx, true, false, x,     y + 8, argb);
+        draw_8x8_tile(fb, bl, palette_idx, true, false, x + 8, y + 8, argb);
+    } else if (!flip_x && flip_y) {
+        draw_8x8_tile(fb, bl, palette_idx, false, true, x,     y,     argb);
+        draw_8x8_tile(fb, br, palette_idx, false, true, x + 8, y,     argb);
+        draw_8x8_tile(fb, tl, palette_idx, false, true, x,     y + 8, argb);
+        draw_8x8_tile(fb, tr, palette_idx, false, true, x + 8, y + 8, argb);
+    } else { /* flip_x && flip_y */
+        draw_8x8_tile(fb, br, palette_idx, true, true, x,     y,     argb);
+        draw_8x8_tile(fb, bl, palette_idx, true, true, x + 8, y,     argb);
+        draw_8x8_tile(fb, tr, palette_idx, true, true, x,     y + 8, argb);
+        draw_8x8_tile(fb, tl, palette_idx, true, true, x + 8, y + 8, argb);
     }
 }
 
