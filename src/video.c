@@ -66,12 +66,17 @@ static uint16_t s_cps_b[CPS_B_REG_COUNT];
  */
 
 /* GFX RAM layout registers (at $800100+) */
-#define CPS_A_SCROLL1_BASE 0x100  /* Scroll 1 tilemap base in GFX RAM */
-#define CPS_A_SCROLL2_BASE 0x102  /* Scroll 2 tilemap base */
-#define CPS_A_SCROLL3_BASE 0x104  /* Scroll 3 tilemap base */
-#define CPS_A_OBJ_BASE     0x106  /* Object (sprite) base */
-#define CPS_A_OTHER_BASE   0x108  /* Other (palette, row scroll) */
-#define CPS_A_PALETTE_CTRL 0x10A  /* Palette control */
+/* CPS-A base registers. Real CPS1 hardware order (MAME cps1.cpp): OBJ first,
+ * then scroll1/2/3, then other, then palette. The previous defines were shifted
+ * one register earlier (scroll1 at $100), so every layer read the wrong base —
+ * the init writes $800102=$90C0 as the SCROLL1 base but it was read as scroll2,
+ * leaving scroll1 pointed at the OBJ base ($10000, empty). */
+#define CPS_A_OBJ_BASE     0x100  /* Object (sprite) base */
+#define CPS_A_SCROLL1_BASE 0x102  /* Scroll 1 tilemap base in GFX RAM */
+#define CPS_A_SCROLL2_BASE 0x104  /* Scroll 2 tilemap base */
+#define CPS_A_SCROLL3_BASE 0x106  /* Scroll 3 tilemap base */
+#define CPS_A_OTHER_BASE   0x108  /* Other (row scroll) */
+#define CPS_A_PALETTE_CTRL 0x10A  /* Palette base */
 #define CPS_A_SCROLL1_X    0x10C  /* Scroll 1 X offset */
 #define CPS_A_SCROLL1_Y    0x10E  /* Scroll 1 Y offset */
 #define CPS_A_SCROLL2_X    0x110  /* Scroll 2 X offset */
