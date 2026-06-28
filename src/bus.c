@@ -94,6 +94,23 @@ uint8_t bus_read8(uint32_t addr) {
         return 0;  /* Unmapped ROM space */
     }
 
+    /* Input / DIP ports ($800000-$80001F) — these are NOT CPS-A registers.
+     * SF2 reads several of them as bytes (e.g. loc_001C4E reads DIP A/B and the
+     * system byte at $80001A/$80001C/$80001E); routing them to video_read_cps_a
+     * returns garbage, which mis-selects attract scene paths. Mirror bus_read16. */
+    if (addr >= 0x800000 && addr < 0x800020) {
+        uint16_t val;
+        switch (addr & ~1u) {
+            case 0x800000: case 0x800006: val = io_read_player1(); break;
+            case 0x800008: case 0x800018: val = io_read_player2(); break;
+            case 0x80001A: val = io_read_dsw();    break;
+            case 0x80001C: val = io_read_system(); break;
+            case 0x80001E: val = io_read_dsw();    break;
+            default:       val = io_read_system(); break;
+        }
+        return (uint8_t)val;
+    }
+
     /* CPS-A registers */
     if (addr >= 0x800000 && addr < 0x800140) {
         uint32_t offset = addr - 0x800000;
