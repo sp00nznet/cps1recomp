@@ -82,8 +82,9 @@ static void cps1_vblank_hook(void) {
     bus_wram_write8(0x020E, 0xFF);
 
     /* Capture frames as BMP + diagnostic dump */
-    if (s_frame_count == 600 || s_frame_count == 1200) {
-        FILE *bmp = fopen("sf2_frame.bmp", "wb");
+    if (s_frame_count == 600 || s_frame_count == 1700) {
+        const char *fn = (s_frame_count == 600) ? "shot_title.bmp" : "shot_select.bmp";
+        FILE *bmp = fopen(fn, "wb");
         if (bmp) {
             int w = CPS1_SCREEN_WIDTH, h = CPS1_SCREEN_HEIGHT;
             int img_size = w * h * 4;
@@ -106,7 +107,7 @@ static void cps1_vblank_hook(void) {
             fclose(bmp);
         }
         /* Dump CPS-A registers, tilemap entries, palette */
-        FILE *df = fopen("sf2_diag.txt", "w");
+        FILE *df = fopen((s_frame_count == 600) ? "diag_title.txt" : "diag_select.txt", "w");
         if (df) {
             fprintf(df, "=== Frame %d diagnostic ===\n", s_frame_count);
             /* Game state from Work RAM (A5=$FF8000) */
@@ -183,8 +184,35 @@ static void cps1_vblank_hook(void) {
                 }
             }
             fprintf(df, "  Total non-standard entries: %d\n", s2_nonstd);
+            /* Scroll2/3 tilemap codes via the SWIZZLED scan the renderer uses. */
+            uint32_t s2b = ((uint32_t)video_read_cps_a(0x104) << 8) % 0x30000;
+            uint32_t s3b = ((uint32_t)video_read_cps_a(0x106) << 8) % 0x30000;
+            fprintf(df, "\nScroll2 codes (base $%05X) row0 cols0-11 [swizzled]:\n ", s2b);
+            for (int c = 0; c < 12; c++) {
+                uint32_t sc = ((0&0x0f)|((c&0x3f)<<4)|((0&0x30)<<6));
+                fprintf(df, " $%04X", video_gfxram_read(s2b + sc*4));
+            }
+            /* Scan scroll3 region ($8000-$BFFF) for non-zero tile codes. */
+            int s3nz = 0; uint32_t s3first = 0; uint16_t s3firstcode = 0;
+            for (uint32_t o = s3b; o < s3b + 0x4000; o += 4) {
+                uint16_t c = video_gfxram_read(o);
+                if (c != 0) { if (s3nz == 0) { s3first = o; s3firstcode = c; } s3nz++; }
+            }
+            fprintf(df, "\nScroll3 ($%05X): %d non-zero entries; first @%05X code=$%04X\n",
+                    s3b, s3nz, s3first, s3firstcode);
+            fprintf(df, "Scroll3 sample (linear entries 0,64,128,...,15*64):\n ");
+            for (int i = 0; i < 16; i++)
+                fprintf(df, " $%04X", video_gfxram_read(s3b + (i*64)*4));
+            fprintf(df, "\n");
+            /* Sprite/object table (first 16 entries, 8 bytes each) */
+            uint32_t oo = ((uint32_t)video_read_cps_a(0x100) << 8) % 0x30000;
+            fprintf(df, "\nObject table (first 16 at $%05X) X Y code attr:\n", oo);
+            for (int i = 0; i < 16; i++)
+                fprintf(df, "  [%d] %04X %04X %04X %04X\n", i,
+                        video_gfxram_read(oo+i*8), video_gfxram_read(oo+i*8+2),
+                        video_gfxram_read(oo+i*8+4), video_gfxram_read(oo+i*8+6));
             /* Palette data from CPS_A_OTHER_BASE register ($800108) */
-            uint16_t pal_reg = video_read_cps_a(0x108);
+            uint16_t pal_reg = video_read_cps_a(0x10A);  /* renderer's actual palette base */
             uint32_t p_off = ((uint32_t)pal_reg << 8) % 0x30000;
             fprintf(df, "\nPalette (first 32 colors at $%05X):\n", p_off);
             for (int i = 0; i < 32; i++) {

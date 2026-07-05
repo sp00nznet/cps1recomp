@@ -102,10 +102,13 @@ uint8_t bus_read8(uint32_t addr) {
         uint16_t val;
         switch (addr & ~1u) {
             case 0x800000: case 0x800006: val = io_read_player1(); break;
-            case 0x800008: case 0x800018: val = io_read_player2(); break;
-            case 0x80001A: val = io_read_dsw();    break;
-            case 0x80001C: val = io_read_system(); break;
-            case 0x80001E: val = io_read_dsw();    break;
+            case 0x800008: val = io_read_player2(); break;
+            /* $800018 is the SF2 system port (coins/start): START1=bit6, COIN1=bit0.
+             * The game stores ~$800018 at A5+$76 and tests bit 6 for START1. */
+            case 0x800018: val = io_read_system(); break;
+            case 0x80001A: val = io_read_dsw();    break;  /* DSWA */
+            case 0x80001C: val = io_read_dsw();    break;  /* DSWB */
+            case 0x80001E: val = io_read_dsw();    break;  /* DSWC */
             default:       val = io_read_system(); break;
         }
         return (uint8_t)val;
@@ -167,10 +170,10 @@ uint16_t bus_read16(uint32_t addr) {
             case 0x800000: return io_read_player1();     /* P1 direction + punches */
             case 0x800006: return io_read_player1();     /* P1 alt read */
             case 0x800008: return io_read_player2();     /* P2 direction + punches */
-            case 0x800018: return io_read_player2();     /* P2 alt */
+            case 0x800018: return io_read_system();      /* Coins + starts (START1=bit6) */
             case 0x80001A: return io_read_dsw();         /* DIP switches A */
-            case 0x80001C: return io_read_system();      /* Coins + starts */
-            case 0x80001E: return io_read_dsw();         /* DIP switches B */
+            case 0x80001C: return io_read_dsw();         /* DIP switches B */
+            case 0x80001E: return io_read_dsw();         /* DIP switches C */
             case 0x800176: return io_read_extra();       /* SF2 kick buttons (CPS-B mapped) */
         }
 

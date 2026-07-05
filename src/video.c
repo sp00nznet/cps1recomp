@@ -144,6 +144,13 @@ void video_write_cps_b(uint32_t offset, uint16_t val) {
 }
 
 uint16_t video_read_cps_b(uint32_t offset) {
+    /* CPS-B register $800148 (offset 0x08): SF2's attract handler ($006496)
+     * reads this and only commits to the credit/start path (terminating the
+     * attract task) when (value & 0xFC3F) == 0x407. The game never WRITES it,
+     * so it's a hardware/protection readback we don't yet model. Provisional
+     * value lets the flow proceed: coin -> START -> game-start -> character
+     * select. TODO: source the real SF2 CPS-B $800148 value. */
+    if (offset == 0x08) return 0x0407;
     uint32_t idx = offset / 2;
     if (idx < CPS_B_REG_COUNT) {
         return s_cps_b[idx];
@@ -447,6 +454,24 @@ static void render_scroll2(uint32_t *fb, const uint32_t *argb) {
  * Render Scroll 3 (16x16 tile layer, background).
  * Same format as Scroll 2 but with its own base/scroll registers.
  */
+/* A CPS1 scroll3 tile is 32x32 = four 16x16 quadrants. Tile T's quadrants are
+ * the 16x16 tiles T*4 + {0=TL,1=TR,2=BL,3=BR}; each is drawn with the working
+ * 16x16 path. Flip mirrors the quadrant layout and each quadrant. */
+static void draw_32x32_tile(
+    uint32_t *fb, uint32_t tile_num, int palette_idx,
+    bool flip_x, bool flip_y, int x, int y, const uint32_t *argb)
+{
+    for (int qy = 0; qy < 2; qy++) {
+        for (int qx = 0; qx < 2; qx++) {
+            uint32_t sub = tile_num * 4 + (uint32_t)(qy * 2 + qx);
+            int dx = flip_x ? (1 - qx) : qx;
+            int dy = flip_y ? (1 - qy) : qy;
+            draw_16x16_tile(fb, sub, palette_idx, flip_x, flip_y,
+                            x + dx * 16, y + dy * 16, argb);
+        }
+    }
+}
+
 static void render_scroll3(uint32_t *fb, const uint32_t *argb) {
     uint16_t base_reg = s_cps_a[CPS_A_SCROLL3_BASE / 2];
     uint32_t tilemap_base = gfxram_base_from_reg(base_reg);
@@ -454,13 +479,14 @@ static void render_scroll3(uint32_t *fb, const uint32_t *argb) {
     int scroll_x = (int16_t)s_cps_a[CPS_A_SCROLL3_X / 2] + 0x40;
     int scroll_y = (int16_t)s_cps_a[CPS_A_SCROLL3_Y / 2];
 
-    int start_col = scroll_x / 16;
-    int start_row = scroll_y / 16;
-    int off_x = scroll_x % 16;
-    int off_y = scroll_y % 16;
+    /* scroll3 uses 32x32 tiles (64x64 tilemap = 2048x2048 virtual). */
+    int start_col = scroll_x / 32;
+    int start_row = scroll_y / 32;
+    int off_x = scroll_x % 32;
+    int off_y = scroll_y % 32;
 
-    for (int row = 0; row < 15; row++) {
-        for (int col = 0; col < 25; col++) {
+    for (int row = 0; row < 8; row++) {
+        for (int col = 0; col < 13; col++) {
             int map_col = (start_col + col) & 63;
             int map_row = (start_row + row) & 63;
 
@@ -475,10 +501,10 @@ static void render_scroll3(uint32_t *fb, const uint32_t *argb) {
 
             if (tile_num == 0) continue;
 
-            int px = col * 16 - off_x;
-            int py = row * 16 - off_y;
+            int px = col * 32 - off_x;
+            int py = row * 32 - off_y;
 
-            draw_16x16_tile(fb, tile_num, palette_idx, flip_x, flip_y, px, py, argb);
+            draw_32x32_tile(fb, tile_num, palette_idx, flip_x, flip_y, px, py, argb);
         }
     }
 }
@@ -501,31 +527,50 @@ static void render_sprites(uint32_t *fb, const uint32_t *argb) {
     uint16_t base_reg = s_cps_a[CPS_A_OBJ_BASE / 2];
     uint32_t obj_base = gfxram_base_from_reg(base_reg);
 
-    /* Render sprites back-to-front (sprite 255 first, 0 on top) */
+    /* CPS1 object (sprite) table format, 8 bytes per entry (MAME cps1.cpp):
+     *   word0 = X position (9-bit)
+     *   word1 = Y position (9-bit)
+     *   word2 = tile code
+     *   word3 = attr: palette (bits 0-4), flipx (0x20), flipy (0x40),
+     *           and for multi-tile sprites width-1 in (0x0F00)>>8, height-1 in
+     *           (0xF000)>>12.
+     * Render back-to-front (sprite 255 first, sprite 0 on top). */
     for (int spr = CPS1_MAX_SPRITES - 1; spr >= 0; spr--) {
         uint32_t entry_addr = obj_base + (uint32_t)(spr * 8);
 
-        uint16_t w0 = gfxram_read16(entry_addr + 0);  /* Tile number */
-        uint16_t w1 = gfxram_read16(entry_addr + 2);  /* Y + attributes */
-        uint16_t w2 = gfxram_read16(entry_addr + 4);  /* Palette + flip */
-        uint16_t w3 = gfxram_read16(entry_addr + 6);  /* X position */
+        uint16_t w0 = gfxram_read16(entry_addr + 0);  /* X */
+        uint16_t w1 = gfxram_read16(entry_addr + 2);  /* Y */
+        uint16_t code = gfxram_read16(entry_addr + 4);  /* tile code */
+        uint16_t attr = gfxram_read16(entry_addr + 6);  /* palette/flip/size */
 
-        uint16_t tile_num = w0;
-        if (tile_num == 0) continue;
+        if (code == 0) continue;
 
-        /* X and Y positions (9-bit, signed) */
-        int x = w3 & 0x1FF;
+        int x = w0 & 0x1FF;
         int y = w1 & 0x1FF;
+        if (x >= 0x1C0) x -= 0x200;   /* wrap negative X */
+        if (y >= 0x1C0) y -= 0x200;   /* wrap negative Y */
 
-        /* Adjust for screen (CPS1 sprites can wrap) */
-        if (x >= 384) x -= 512;
-        if (y >= 224) y -= 512;
+        int palette_idx = attr & 0x1F;
+        bool flip_x = (attr & 0x20) != 0;
+        bool flip_y = (attr & 0x40) != 0;
 
-        int palette_idx = w2 & 0x1F;             /* bits 0-4: palette */
-        bool flip_x = (w2 & 0x20) != 0;         /* bit 5 */
-        bool flip_y = (w2 & 0x40) != 0;         /* bit 6 */
+        int nx = (attr >> 8) & 0x0F;   /* width-1  in 16px tiles */
+        int ny = (attr >> 12) & 0x0F;  /* height-1 in 16px tiles */
 
-        draw_16x16_tile(fb, tile_num, palette_idx, flip_x, flip_y, x, y, argb);
+        if ((attr & 0xFF00) == 0) {
+            /* Single 16x16 sprite */
+            draw_16x16_tile(fb, code, palette_idx, flip_x, flip_y, x, y, argb);
+        } else {
+            /* Multi-tile sprite: (nx+1) x (ny+1) grid; tile += 1 across, 0x10 down. */
+            for (int cy = 0; cy <= ny; cy++) {
+                for (int cx = 0; cx <= nx; cx++) {
+                    uint16_t t = (uint16_t)(code + cx + cy * 0x10);
+                    int sx = flip_x ? x + (nx - cx) * 16 : x + cx * 16;
+                    int sy = flip_y ? y + (ny - cy) * 16 : y + cy * 16;
+                    draw_16x16_tile(fb, t, palette_idx, flip_x, flip_y, sx, sy, argb);
+                }
+            }
+        }
     }
 }
 
@@ -550,10 +595,10 @@ void video_render_frame(uint32_t *framebuffer) {
     }
     const uint32_t *argb = live_palette;
 
-    /* Fill with black (palette entry 0 could be the backdrop) */
-    uint32_t backdrop = argb[0];
+    /* Uncovered pixels are black on CPS1, not palette entry 0 (which is just the
+     * first sprite-palette colour and is often non-black, e.g. red on SF2). */
     for (int i = 0; i < CPS1_SCREEN_WIDTH * CPS1_SCREEN_HEIGHT; i++) {
-        framebuffer[i] = backdrop;
+        framebuffer[i] = 0xFF000000u;
     }
 
     /*

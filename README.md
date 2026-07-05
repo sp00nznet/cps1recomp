@@ -11,7 +11,7 @@ cps1recomp is a **reusable runtime library** for building CPS1 static recompilat
 | CPS1 Hardware | What It Does | Our Replacement |
 |---------------|-------------|-----------------|
 | **Motorola 68000** @ 10 MHz | Main CPU | `m68k.h` -- Complete register file + instruction macros (ADD, SUB, CMP, MUL, DIV, shifts, rotates, all 16 condition codes) |
-| **CPS-A / CPS-B ASICs** | Video controller | `video.c` -- Software renderer: 3 scroll layers + 256 sprites, layer priority, tile flipping |
+| **CPS-A / CPS-B ASICs** | Video controller | `video.c` -- Software renderer: scroll1 (8x8), scroll2 (16x16), scroll3 (32x32) layers + 256 sprites (single & multi-tile), layer-enable, tile flipping |
 | **Palette RAM** | 192 palettes x 16 colors | `palette.c` -- 12-bit RGB to ARGB8888 conversion |
 | **Zilog Z80** @ 3.579 MHz | Sound CPU | `z80.c` -- Interpreted Z80 core |
 | **Yamaha YM2151** (OPM) | FM synthesis | `ym2151.c` -- [ymfm](https://github.com/aaronsgiles/ymfm) wrapper |
@@ -51,7 +51,7 @@ CPS1 powered some of the most iconic arcade games ever made:
 
 | Year | Game | Status |
 |------|------|--------|
-| 1991 | **Street Fighter II: The World Warrior** | [In Progress](https://github.com/sp00nznet/sf2) |
+| 1991 | **Street Fighter II: The World Warrior** | [In Progress](https://github.com/sp00nznet/sf2) -- boots through attract -> coin -> START -> **character select** |
 | 1989 | Final Fight | Planned |
 | 1989 | Ghouls 'n Ghosts | Planned |
 | 1989 | Strider | Planned |

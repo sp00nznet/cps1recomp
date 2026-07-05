@@ -52,12 +52,14 @@ void io_set_button(int player, uint8_t button, bool pressed);
 #define IO_BTN_MK      0x02   /* Medium Kick */
 #define IO_BTN_HK      0x04   /* Heavy Kick */
 
-/* System buttons */
+/* System buttons (CPS1 standard IN0 layout at $800018).
+ * SF2 reads ~$800018 into A5+$76 and edge-detects bits 4,5 (0x30 =
+ * START1|START2) to start a game, and tests bit 6 for the service coin. */
 #define IO_BTN_COIN1   0x01
 #define IO_BTN_COIN2   0x02
-#define IO_BTN_START1  0x04
-#define IO_BTN_START2  0x08
-#define IO_BTN_SERVICE 0x10
+#define IO_BTN_START1  0x10
+#define IO_BTN_START2  0x20
+#define IO_BTN_SERVICE 0x40
 
 /* Register reads (called by bus layer) */
 uint16_t io_read_player1(void);    /* P1 direction + punches */
