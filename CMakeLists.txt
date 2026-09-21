@@ -1,4 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
+# Where the genrecomp checkout lives. Override with -DGENRECOMP_DIR=...
+set(GENRECOMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../gen" CACHE PATH
+    "Directory containing the genrecomp checkout")
+
 project(cps1recomp C CXX)
 
 set(CMAKE_C_STANDARD 17)
@@ -18,7 +22,7 @@ find_package(SDL2 REQUIRED)
 set(Z80_DIR_CANDIDATES
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/z80
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../gen/genrecomp/ext/Genesis-Plus-GX/core/z80
-    D:/recomp/gen/genrecomp/ext/Genesis-Plus-GX/core/z80
+    ${GENRECOMP_DIR}/genrecomp/ext/Genesis-Plus-GX/core/z80
 )
 set(Z80_DIR "")
 foreach(dir ${Z80_DIR_CANDIDATES})
@@ -41,7 +45,7 @@ message(STATUS "Z80 core: interpreter (ported from z80recomp)")
 set(YMFM_DIR_CANDIDATES
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/ymfm/src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../gen/genrecomp/ext/ymfm/src
-    D:/recomp/gen/genrecomp/ext/ymfm/src
+    ${GENRECOMP_DIR}/genrecomp/ext/ymfm/src
 )
 set(YMFM_DIR "")
 foreach(dir ${YMFM_DIR_CANDIDATES})
